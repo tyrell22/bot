@@ -19,6 +19,10 @@ const tradeManager = require('./trade/manager');
 const strategyCoordinator = require('./strategy/index');
 const mlTrainer = require('./ml/trainer');
 const storage = require('./data/storage');
+const riskManager = require('./trade/risk');
+
+// Create a shared context object for dependency injection
+const sharedContext = {};
 
 async function init() {
   // Ensure required directories exist
@@ -39,7 +43,7 @@ async function init() {
   
   // Initialize ByBit connection
   try {
-    // Now try with the API module
+    // Try with the API module
     await bybit.init();
     logger.info('ByBit API connection established');
   } catch (error) {
@@ -67,15 +71,6 @@ async function init() {
     process.exit(1);
   }
   
-  // Initialize ByBit connection
-  try {
-    await bybit.init();
-    logger.info('ByBit API connection established');
-  } catch (error) {
-    logger.error(`Failed to initialize ByBit API: ${error.message}`);
-    process.exit(1);
-  }
-  
   // Select top symbols by volume
   try {
     const topSymbols = await symbolSelector.getTopSymbolsByVolume(config.topSymbolsCount);
@@ -92,14 +87,21 @@ async function init() {
   await wsManager.initConnections(config.symbols);
   logger.info(`WebSocket connections established for ${config.symbols.length} symbols`);
   
+  // Store WebSocket manager in shared context
+  sharedContext.wsManager = wsManager;
+  
+  // Initialize risk manager with WebSocket manager
+  riskManager.init(wsManager);
+  logger.info('Risk manager initialized with WebSocket data access');
+  
   // Initialize trade manager
   tradeManager.init();
   
   // Initialize data collector
   dataCollector.init(wsManager);
   
-  // Initialize strategy coordinator
-  strategyCoordinator.init(wsManager, dataCollector);
+  // Initialize strategy coordinator with shared context
+  strategyCoordinator.init(wsManager, dataCollector, sharedContext);
   
   // Initialize ML model - with error handling for TensorFlow.js
   try {

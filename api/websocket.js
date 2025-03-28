@@ -27,7 +27,7 @@ class WebSocketManager extends EventEmitter {
    */
   async initConnections(symbols) {
     try {
-      this.logger.info('Fetching historical klines for initialization...');
+      this.logger.debug('Fetching historical klines for initialization...');
       for (const symbol of symbols) {
         for (const timeframe of config.timeframes) {
           await this.fetchHistoricalKlines(symbol, timeframe, 50);
@@ -38,7 +38,7 @@ class WebSocketManager extends EventEmitter {
       await this.connectPrivateWebSocket();
 
       this.connected = true;
-      this.logger.info('WebSocketManager initialized successfully with historical data');
+      this.logger.debug('WebSocketManager initialized successfully with historical data');
       return true;
     } catch (error) {
       this.logger.error(`Failed to initialize WebSocketManager: ${error.message}`);
@@ -64,7 +64,7 @@ class WebSocketManager extends EventEmitter {
 
       this.marketData.klines[symbol][timeframe] = klines.sort((a, b) => a.timestamp - b.timestamp);
 
-      this.logger.info(`Fetched ${klines.length} historical klines for ${symbol} on ${timeframe}`);
+      this.logger.debug(`Fetched ${klines.length} historical klines for ${symbol} on ${timeframe}`);
       this.emit('kline', { symbol, timeframe, data: this.marketData.klines[symbol][timeframe] });
     } catch (error) {
       this.logger.error(`Failed to fetch historical klines for ${symbol} (${timeframe}): ${error.message}`);
@@ -83,7 +83,7 @@ class WebSocketManager extends EventEmitter {
       this.reconnectAttempts['public'] = 0;
 
       ws.on('open', () => {
-        this.logger.info('Public WebSocket connected');
+        this.logger.debug('Public WebSocket connected');
         this.setupPingInterval('public');
         this.subscribeToKlines(symbols);
         this.subscribeToOrderbooks(symbols);
@@ -121,7 +121,7 @@ class WebSocketManager extends EventEmitter {
       this.reconnectAttempts['private'] = 0;
 
       ws.on('open', () => {
-        this.logger.info('Private WebSocket connected, authenticating...');
+        this.logger.debug('Private WebSocket connected, authenticating...');
 
         const expires = Date.now() + 10000;
         const signature = crypto
@@ -142,7 +142,7 @@ class WebSocketManager extends EventEmitter {
           const message = JSON.parse(data);
           if (message.op === 'auth') {
             if (message.success) {
-              this.logger.info(`Private WebSocket authenticated successfully: ${message.conn_id}`);
+              this.logger.debug(`Private WebSocket authenticated successfully: ${message.conn_id}`);
               this.setupPingInterval('private');
               this.subscribeToPrivateTopics(['execution', 'position', 'order']);
               resolve(true);
@@ -202,7 +202,7 @@ class WebSocketManager extends EventEmitter {
     this.reconnectAttempts[connectionName]++;
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts[connectionName]);
 
-    this.logger.info(`Attempting to reconnect public WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
+    this.logger.debug(`Attempting to reconnect public WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
 
     setTimeout(() => {
       this.connectPublicWebSocket(symbols).catch((error) => {
@@ -224,7 +224,7 @@ class WebSocketManager extends EventEmitter {
     this.reconnectAttempts[connectionName]++;
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts[connectionName]);
 
-    this.logger.info(`Attempting to reconnect private WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
+    this.logger.debug(`Attempting to reconnect private WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
 
     setTimeout(() => {
       this.connectPrivateWebSocket().catch((error) => {
@@ -258,7 +258,7 @@ class WebSocketManager extends EventEmitter {
       const klines = this.marketData.klines[symbol][timeframe];
       let newKlineCount = 0;
 
-      this.logger.info(`${symbol} ${timeframe} - Pre-processing kline count: ${klines.length}`);
+      this.logger.debug(`${symbol} ${timeframe} - Pre-processing kline count: ${klines.length}`);
 
       if (Array.isArray(data)) {
         data.forEach((kline) => {
@@ -292,7 +292,7 @@ class WebSocketManager extends EventEmitter {
         klines.splice(0, klines.length - 100);
       }
 
-      this.logger.info(`${symbol} ${timeframe} - Added ${newKlineCount} new klines, total now: ${klines.length}`);
+      this.logger.debug(`${symbol} ${timeframe} - Added ${newKlineCount} new klines, total now: ${klines.length}`);
       this.emit('kline', { symbol, timeframe, data: klines });
     } catch (error) {
       this.logger.error(`Error processing kline data: ${error.message}`);
@@ -337,10 +337,10 @@ class WebSocketManager extends EventEmitter {
       }
     }
 
-    this.logger.info(`Subscribing to klines with args: ${JSON.stringify(args)}`);
+    this.logger.debug(`Subscribing to klines with args: ${JSON.stringify(args)}`);
     const subscribeMsg = { op: 'subscribe', args };
     this.send('public', subscribeMsg);
-    this.logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
+    this.logger.debug(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
   }
 
   /**
@@ -348,10 +348,10 @@ class WebSocketManager extends EventEmitter {
    */
   subscribeToOrderbooks(symbols) {
     const args = symbols.map((symbol) => `orderbook.${config.orderbook.depth}.${symbol}`);
-    this.logger.info(`Subscribing to orderbooks with args: ${JSON.stringify(args)}`);
+    this.logger.debug(`Subscribing to orderbooks with args: ${JSON.stringify(args)}`);
     const subscribeMsg = { op: 'subscribe', args };
     this.send('public', subscribeMsg);
-    this.logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
+    this.logger.debug(`Subscribed to orderbook data for ${symbols.length} symbols`);
   }
 
   /**
@@ -361,7 +361,7 @@ class WebSocketManager extends EventEmitter {
     const args = symbols.map((symbol) => `tickers.${symbol}`);
     const subscribeMsg = { op: 'subscribe', args };
     this.send('public', subscribeMsg);
-    this.logger.info(`Subscribed to ticker data for ${symbols.length} symbols`);
+    this.logger.debug(`Subscribed to ticker data for ${symbols.length} symbols`);
   }
 
   /**
@@ -370,7 +370,7 @@ class WebSocketManager extends EventEmitter {
   subscribeToPrivateTopics(topics) {
     const subscribeMsg = { op: 'subscribe', args: topics };
     this.send('private', subscribeMsg);
-    this.logger.info(`Subscribed to private topics: ${topics.join(', ')}`);
+    this.logger.debug(`Subscribed to private topics: ${topics.join(', ')}`);
   }
 
   /**
@@ -427,7 +427,7 @@ class WebSocketManager extends EventEmitter {
             this.logger.debug(`Received unknown topic: ${message.topic}`);
         }
       } else {
-        this.logger.info(`Received message without topic or data: ${JSON.stringify(message)}`);
+        this.logger.debug(`Received message without topic or data: ${JSON.stringify(message)}`);
       }
     } catch (error) {
       this.logger.error(`Error processing public WebSocket message: ${error.message}`);
@@ -449,7 +449,7 @@ class WebSocketManager extends EventEmitter {
 
       if (message.op === 'auth') {
         if (message.success) {
-          this.logger.info(`WebSocket authentication successful: ${message.conn_id}`);
+          this.logger.debug(`WebSocket authentication successful: ${message.conn_id}`);
         } else {
           this.logger.error(`WebSocket authentication failed: ${message.ret_msg}`);
           if (this.connections['private']) {
@@ -522,7 +522,7 @@ class WebSocketManager extends EventEmitter {
             bids: [],
             asks: []
           };
-          this.logger.info(`Created new orderbook for ${symbol}`);
+          this.logger.debug(`Created new orderbook for ${symbol}`);
         }
         
         const orderbook = this.marketData.orderbooks[symbol];
@@ -591,7 +591,7 @@ class WebSocketManager extends EventEmitter {
       
       // Handle snapshot updates (though ByBit V5 mostly uses deltas)
       if (message.type === 'snapshot') {
-        this.logger.info(`Processing snapshot for ${symbol} orderbook`);
+        this.logger.debug(`Processing snapshot for ${symbol} orderbook`);
         
         if (!data || !Array.isArray(data.b) || !Array.isArray(data.a)) {
           this.logger.warn(`Invalid snapshot data for ${symbol}`);
@@ -611,7 +611,7 @@ class WebSocketManager extends EventEmitter {
           }))
         };
         
-        this.logger.info(`Created orderbook snapshot for ${symbol} with ${data.b.length} bids and ${data.a.length} asks`);
+        this.logger.debug(`Created orderbook snapshot for ${symbol} with ${data.b.length} bids and ${data.a.length} asks`);
         
         // Emit the updated orderbook
         this.emit('orderbook', {
@@ -632,14 +632,14 @@ class WebSocketManager extends EventEmitter {
 processTickerData(message) {
   if (!message || !message.topic || !message.data) {
     this.logger.warn('Received invalid ticker data');
-    this.logger.info(`Raw message: ${JSON.stringify(message)}`);
+    this.logger.debug(`Raw message: ${JSON.stringify(message)}`);
     return;
   }
 
   const topicParts = message.topic.split('.');
   if (topicParts.length < 2) {
     this.logger.warn(`Received invalid ticker topic: ${message.topic}`);
-    this.logger.info(`Raw message: ${JSON.stringify(message)}`);
+    this.logger.debug(`Raw message: ${JSON.stringify(message)}`);
     return;
   }
 
@@ -785,7 +785,7 @@ processTickerData(message) {
   async closeAll() {
     for (const [name, ws] of Object.entries(this.connections)) {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        this.logger.info(`Closing ${name} WebSocket connection`);
+        this.logger.debug(`Closing ${name} WebSocket connection`);
         ws.close();
       }
       

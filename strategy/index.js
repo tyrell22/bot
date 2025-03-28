@@ -15,6 +15,7 @@ class StrategyCoordinator {
     this.activeStrategies = [];
     this.wsManager = null;
     this.dataCollector = null;
+    this.sharedContext = null;
     this.tradeCounter = 0;
     this.tradeLimiter = {
       count: 0,
@@ -28,10 +29,12 @@ class StrategyCoordinator {
    * Initialize the strategy coordinator
    * @param {Object} wsManager - WebSocket manager
    * @param {Object} dataCollector - Data collector
+   * @param {Object} sharedContext - Shared context object for dependency injection
    */
-  init(wsManager, dataCollector) {
+  init(wsManager, dataCollector, sharedContext = {}) {
     this.wsManager = wsManager;
     this.dataCollector = dataCollector;
+    this.sharedContext = sharedContext;
     
     // Initialize strategies
     this.activeStrategies.push(scalping);

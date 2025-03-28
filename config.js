@@ -14,16 +14,16 @@ module.exports = {
   trading: {
     leverage: 10, // 10x leverage
     targetProfit: 0.03, // 3% profit target
-    stopLoss: 0.015, // 1.5% stop loss
+    stopLoss: 0.02, // 1.5% stop loss
     trailingStopActivation: 0.02, // Activate trailing stop after 2% profit
     maxTradesPerHour: 15,
     maxOpenPositions: 10,
-    positionSizePercentage: 0.05, // 5% of available balance per trade
+    positionSizePercentage: 0.01, // 5% of available balance per trade
     inactivePositionMinutes: 20, // Close positions not moving after 20 minutes
   },
   
   // Timeframes to analyze
-  timeframes: ['1', '5', '15'],
+  timeframes: ['1' , '3'],
   
   // Main timeframe for signals
   mainTimeframe: '1',
@@ -39,7 +39,7 @@ module.exports = {
   ],
   
   // Number of top symbols by volume to track
-  topSymbolsCount: 1,
+  topSymbolsCount: 50,
   
   // Indicators configuration
   indicators: {

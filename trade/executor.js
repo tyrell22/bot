@@ -24,18 +24,38 @@ class TradeExecutor extends EventEmitter {
    */
   async executeSignal(signal) {
     try {
-      // Apply risk management
-      const riskParams = await riskManager.calculatePositionSize(signal.symbol, signal.direction);
+      // Get account information for available balance
+      const accountInfo = await bybit.getAccountInfo();
       
-      if (!riskParams.valid) {
-        throw new Error(`Risk management rejected trade: ${riskParams.message}`);
+      if (!accountInfo) {
+        throw new Error('Failed to get account information');
       }
+      
+      // Get current price from WebSocket (faster and more accurate)
+      let currentPrice = null;
+      if (global.wsManager) {
+        const tickerData = global.wsManager.getTicker(signal.symbol);
+        if (tickerData && tickerData.lastPrice) {
+          currentPrice = parseFloat(tickerData.lastPrice);
+        }
+      }
+      
+      // Fall back to signal price if WebSocket price not available
+      if (!currentPrice) {
+        currentPrice = signal.price;
+      }
+      
+      // Calculate account value
+      const accountEquity = parseFloat(accountInfo.availableBalance);
+      
+      // Calculate position size directly (this is the core fix)
+      // Formula: position size = (accountEquity * riskPercent) / currentPrice
+      // For leveraged trading: position size = (accountEquity * riskPercent * leverage) / currentPrice
+      const positionValue = accountEquity * config.trading.positionSizePercentage * config.trading.leverage;
+      const positionSize = positionValue / currentPrice;
       
       // Generate trade ID
       const tradeId = uuidv4();
-      
-      // Set leverage
-      await bybit.setLeverage(signal.symbol, config.trading.leverage);
       
       // Create order parameters
       const side = signal.direction === 'BUY' ? 'Buy' : 'Sell';
@@ -43,42 +63,21 @@ class TradeExecutor extends EventEmitter {
         symbol: signal.symbol,
         side: side,
         orderType: 'Market',
-        quantity: riskParams.positionSize,
+        quantity: positionSize.toFixed(), // Use 3 decimal places for most crypto pairs
         timeInForce: 'GTC'
       };
-      
-      // Calculate take profit price
-      let takeProfitPrice;
-      if (side === 'Buy') {
-        takeProfitPrice = signal.price * (1 + config.trading.targetProfit);
-      } else {
-        takeProfitPrice = signal.price * (1 - config.trading.targetProfit);
-      }
-      
-      // Calculate stop loss price
-      let stopLossPrice;
-      if (side === 'Buy') {
-        stopLossPrice = signal.price * (1 - config.trading.stopLoss);
-      } else {
-        stopLossPrice = signal.price * (1 + config.trading.stopLoss);
-      }
-      
-      // Add take profit and stop loss
-      orderParams.takeProfit = takeProfitPrice.toFixed(5);
-      orderParams.stopLoss = stopLossPrice.toFixed(5);
       
       // Track pending trade
       this.pendingTrades.set(tradeId, {
         id: tradeId,
         signal,
         orderParams,
-        riskParams,
         status: 'PENDING',
         createdAt: Date.now()
       });
       
       // Place the order
-      logger.info(`Executing ${side} order for ${signal.symbol} with quantity ${riskParams.positionSize}`);
+      logger.info(`Executing ${side} order for ${signal.symbol} with quantity ${orderParams.quantity}`);
       const orderResult = await bybit.placeOrder(orderParams);
       
       // Update pending trade
@@ -95,10 +94,8 @@ class TradeExecutor extends EventEmitter {
         id: tradeId,
         symbol: signal.symbol,
         direction: signal.direction,
-        entryPrice: signal.price,
-        quantity: riskParams.positionSize,
-        takeProfitPrice,
-        stopLossPrice,
+        entryPrice: currentPrice,
+        quantity: orderParams.quantity,
         leverage: config.trading.leverage,
         orderId: orderResult.orderId,
         status: 'OPEN',
@@ -121,13 +118,6 @@ class TradeExecutor extends EventEmitter {
       // Emit trade execution event
       this.emit('trade_executed', trade);
       
-      // After order placement, setup trailing stop
-      if (config.trading.trailingStopActivation > 0) {
-        this.setupTrailingStop(trade).catch(error => {
-          logger.error(`Failed to setup trailing stop for ${trade.symbol}: ${error.message}`);
-        });
-      }
-      
       return trade;
     } catch (error) {
       logger.error(`Trade execution error for ${signal.symbol}: ${error.message}`);
@@ -139,51 +129,6 @@ class TradeExecutor extends EventEmitter {
       });
       
       throw error;
-    }
-  }
-  
-  /**
-   * Setup a trailing stop for a trade
-   * @param {Object} trade - The trade to set trailing stop for
-   */
-  async setupTrailingStop(trade) {
-    try {
-      // Calculate activation price based on entry price
-      let activationPriceChange;
-      let activationPrice;
-      
-      if (trade.direction === 'BUY') {
-        activationPriceChange = trade.entryPrice * config.trading.trailingStopActivation;
-        activationPrice = trade.entryPrice + activationPriceChange;
-      } else {
-        activationPriceChange = trade.entryPrice * config.trading.trailingStopActivation;
-        activationPrice = trade.entryPrice - activationPriceChange;
-      }
-      
-      // Calculate trailing stop distance (1% of price)
-      const trailingStop = trade.entryPrice * 0.01;
-      
-      // Set up the trailing stop
-      const trailingStopParams = {
-        symbol: trade.symbol,
-        trailingStop: trailingStop.toFixed(4),
-        activationPrice: activationPrice.toFixed(4)
-      };
-      
-      // Save trailing stop info to trade
-      trade.trailingStop = {
-        distance: trailingStop,
-        activationPrice: activationPrice
-      };
-      
-      this.saveTrade(trade);
-      
-      logger.info(`Setup trailing stop for ${trade.symbol} at activation price ${activationPrice.toFixed(6)} with distance ${trailingStop.toFixed(6)}`);
-      
-      return true;
-    } catch (error) {
-      logger.error(`Error setting up trailing stop for ${trade.symbol}: ${error.message}`);
-      return false;
     }
   }
   

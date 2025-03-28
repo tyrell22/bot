@@ -11,6 +11,16 @@ class RiskManager {
     this.maxDailyRisk = 0.1; // 10% of account
     this.dailyLossCounter = 0;
     this.dailyResetTime = null;
+    this.wsManager = null;
+  }
+  
+  /**
+   * Initialize the risk manager with WebSocket manager
+   * @param {Object} wsManager - WebSocket manager instance
+   */
+  init(wsManager) {
+    this.wsManager = wsManager;
+    logger.info('Risk manager initialized with WebSocket manager');
   }
   
   /**
@@ -28,15 +38,30 @@ class RiskManager {
         throw new Error('Failed to get account information');
       }
       
-      // Get symbol ticker
-      const tickers = await bybit.getTickers(symbol);
+      // Try to get current price from WebSocket first (faster and more reliable)
+      let currentPrice = null;
       
-      if (!tickers || tickers.length === 0) {
-        throw new Error(`Failed to get ticker information for ${symbol}`);
+      if (this.wsManager) {
+        const tickerData = this.wsManager.getTicker(symbol);
+        if (tickerData && tickerData.lastPrice) {
+          currentPrice = parseFloat(tickerData.lastPrice);
+          logger.info(`Using WebSocket ticker price for ${symbol}: ${currentPrice}`);
+        }
       }
       
-      const ticker = tickers[0];
-      const currentPrice = parseFloat(ticker.lastPrice);
+      // Fall back to REST API if WebSocket data is not available
+      if (!currentPrice) {
+        logger.info(`WebSocket ticker not available for ${symbol}, falling back to REST API`);
+        const tickers = await bybit.getTickers(symbol);
+        
+        if (!tickers || tickers.length === 0) {
+          throw new Error(`Failed to get ticker information for ${symbol}`);
+        }
+        
+        const ticker = tickers[0];
+        currentPrice = parseFloat(ticker.lastPrice);
+        logger.info(`Using REST API ticker price for ${symbol}: ${currentPrice}`);
+      }
       
       // Calculate account value
       const accountEquity = parseFloat(accountInfo.totalEquity);
@@ -137,20 +162,35 @@ class RiskManager {
    */
   async analyzeSymbolRisk(symbol) {
     try {
-      // Get volatility information
-      const tickers = await bybit.getTickers(symbol);
+      let highPrice, lowPrice, lastPrice;
       
-      if (!tickers || tickers.length === 0) {
-        throw new Error(`Failed to get ticker information for ${symbol}`);
+      // Try to get data from WebSocket first
+      if (this.wsManager) {
+        const tickerData = this.wsManager.getTicker(symbol);
+        if (tickerData && tickerData.highPrice24h && tickerData.lowPrice24h && tickerData.lastPrice) {
+          highPrice = parseFloat(tickerData.highPrice24h);
+          lowPrice = parseFloat(tickerData.lowPrice24h);
+          lastPrice = parseFloat(tickerData.lastPrice);
+          logger.info(`Using WebSocket data for risk analysis of ${symbol}`);
+        }
       }
       
-      const ticker = tickers[0];
+      // Fall back to REST API if WebSocket data is not available
+      if (!highPrice || !lowPrice || !lastPrice) {
+        logger.info(`WebSocket data not available for risk analysis of ${symbol}, using REST API`);
+        const tickers = await bybit.getTickers(symbol);
+        
+        if (!tickers || tickers.length === 0) {
+          throw new Error(`Failed to get ticker information for ${symbol}`);
+        }
+        
+        const ticker = tickers[0];
+        highPrice = parseFloat(ticker.highPrice24h);
+        lowPrice = parseFloat(ticker.lowPrice24h);
+        lastPrice = parseFloat(ticker.lastPrice);
+      }
       
       // Calculate volatility based on 24h high/low
-      const highPrice = parseFloat(ticker.highPrice24h);
-      const lowPrice = parseFloat(ticker.lowPrice24h);
-      const lastPrice = parseFloat(ticker.lastPrice);
-      
       const volatility24h = (highPrice - lowPrice) / lowPrice;
       const volatilityPercentage = volatility24h * 100;
       
