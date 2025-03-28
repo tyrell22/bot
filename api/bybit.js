@@ -44,9 +44,27 @@ class ByBitAPI {
   /**
    * Generate signature for authenticated requests
    */
-  generateSignature(timestamp, params = {}) {
-    const queryString = timestamp + this.apiKey + (Object.keys(params).length === 0 ? '' : JSON.stringify(params));
-    return crypto.createHmac('sha256', this.apiSecret).update(queryString).digest('hex');
+  generateSignature(timestamp, params = {}, method = 'GET') {
+    // Add recv_window parameter if not present
+    const recvWindow = params.recv_window || '5000';
+    
+    let signString = timestamp + this.apiKey + recvWindow;
+    
+    if (method === 'GET') {
+      // For GET requests, append query parameters alphabetically
+      if (Object.keys(params).length > 0) {
+        const queryString = Object.keys(params)
+          .sort()
+          .map(key => `${key}=${params[key]}`)
+          .join('&');
+        signString += queryString;
+      }
+    } else if (method === 'POST') {
+      // For POST requests, append JSON body
+      signString += JSON.stringify(params);
+    }
+    
+    return crypto.createHmac('sha256', this.apiSecret).update(signString).digest('hex');
   }
   
   /**
@@ -69,19 +87,28 @@ class ByBitAPI {
   async privateRequest(endpoint, method = 'GET', params = {}) {
     try {
       const timestamp = Date.now().toString();
-      const signature = this.generateSignature(timestamp, params);
+      const recv_window = '5000';
+      
+      // Add recv_window to params
+      const requestParams = {
+        ...params,
+        recv_window
+      };
+      
+      const signature = this.generateSignature(timestamp, requestParams, method);
       
       const headers = {
         'X-BAPI-API-KEY': this.apiKey,
         'X-BAPI-TIMESTAMP': timestamp,
-        'X-BAPI-SIGN': signature
+        'X-BAPI-SIGN': signature,
+        'X-BAPI-RECV-WINDOW': recv_window
       };
       
       let response;
       if (method === 'GET') {
-        response = await this.axios.get(endpoint, { params, headers });
+        response = await this.axios.get(endpoint, { params: requestParams, headers });
       } else if (method === 'POST') {
-        response = await this.axios.post(endpoint, params, { headers });
+        response = await this.axios.post(endpoint, requestParams, { headers });
       } else {
         throw new Error(`Unsupported method: ${method}`);
       }

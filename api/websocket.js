@@ -95,33 +95,66 @@ class WebSocketManager extends EventEmitter {
     }
     
     return new Promise((resolve, reject) => {
-      // Generate authentication parameters
-      const expires = Date.now() + 10000;
-      const signature = crypto
-        .createHmac('sha256', config.api.apiSecret)
-        .update(`GET/realtime${expires}`)
-        .digest('hex');
-      
-      const wsUrl = `${config.api.wsBaseUrl}/private?api_key=${config.api.apiKey}&expires=${expires}&signature=${signature}`;
+      // Connect to the private WebSocket endpoint without authentication params
+      const wsUrl = `${config.api.wsBaseUrl}/private`;
       const ws = new WebSocket(wsUrl);
       
       this.connections['private'] = ws;
       this.reconnectAttempts['private'] = 0;
       
       ws.on('open', () => {
-        this.logger.info('Private WebSocket connected');
+        this.logger.info('Private WebSocket connected, authenticating...');
         
-        // Setup ping interval
-        this.setupPingInterval('private');
+        // Generate authentication parameters
+        const expires = Date.now() + 10000;
+        const signature = crypto
+          .createHmac('sha256', config.api.apiSecret)
+          .update(`GET/realtime${expires}`)
+          .digest('hex');
         
-        // Subscribe to execution events
-        this.subscribeToPrivateTopics(['execution', 'position', 'order']);
+        // Send authentication message
+        const authMessage = JSON.stringify({
+          op: "auth",
+          args: [
+            config.api.apiKey,
+            expires,
+            signature
+          ]
+        });
         
-        resolve(true);
+        ws.send(authMessage);
+        
+        // We'll wait for the auth response in the message handler
+        // Don't resolve the promise yet
       });
       
       ws.on('message', (data) => {
-        this.handlePrivateMessage(data);
+        try {
+          const message = JSON.parse(data);
+          
+          // Check for auth response
+          if (message.op === 'auth') {
+            if (message.success) {
+              this.logger.info(`Private WebSocket authenticated successfully: ${message.conn_id}`);
+              
+              // Setup ping interval
+              this.setupPingInterval('private');
+              
+              // Subscribe to execution events
+              this.subscribeToPrivateTopics(['execution', 'position', 'order']);
+              
+              resolve(true);
+            } else {
+              this.logger.error(`Private WebSocket authentication failed: ${message.ret_msg}`);
+              reject(new Error(`Authentication failed: ${message.ret_msg}`));
+            }
+          } else {
+            // Handle other message types
+            this.handlePrivateMessage(data);
+          }
+        } catch (error) {
+          this.logger.error(`Error processing WebSocket message: ${error.message}`);
+        }
       });
       
       ws.on('error', (error) => {
@@ -334,48 +367,64 @@ class WebSocketManager extends EventEmitter {
   }
   
   /**
-   * Handle private WebSocket messages
-   */
-  handlePrivateMessage(data) {
-    try {
-      const message = JSON.parse(data);
-      
-      // Handle ping/pong
-      if (message.op === 'pong') {
-        this.logger.debug('Received pong from private WebSocket');
-        return;
-      }
-      
-      // Handle subscription response
-      if (message.op === 'subscribe') {
-        this.logger.debug(`Subscription to ${message.args} successful`);
-        return;
-      }
-      
-      // Handle data message
-      if (message.topic && message.data) {
-        // Extract topic
-        const topic = message.topic;
-        
-        // Process different private topics
-        switch (topic) {
-          case 'execution':
-            this.processExecutionData(message.data);
-            break;
-          case 'position':
-            this.processPositionData(message.data);
-            break;
-          case 'order':
-            this.processOrderData(message.data);
-            break;
-          default:
-            this.logger.debug(`Received unknown private topic: ${topic}`);
+ * Handle private WebSocket messages
+ */
+handlePrivateMessage(data) {
+  try {
+    const message = JSON.parse(data);
+    
+    // Handle ping/pong
+    if (message.op === 'pong') {
+      this.logger.debug('Received pong from private WebSocket');
+      return;
+    }
+    
+    // Handle authentication response
+    if (message.op === 'auth') {
+      if (message.success) {
+        this.logger.info(`WebSocket authentication successful: ${message.conn_id}`);
+      } else {
+        this.logger.error(`WebSocket authentication failed: ${message.ret_msg}`);
+        // Trigger reconnection with proper authentication
+        if (this.connections['private']) {
+          this.connections['private'].close();
         }
       }
-    } catch (error) {
-      this.logger.error(`Error processing private WebSocket message: ${error.message}`);
+      return;
     }
+    
+    // Handle subscription response
+    if (message.op === 'subscribe') {
+      this.logger.debug(`Subscription to ${message.args} successful`);
+      return;
+    }
+    
+    // Handle data message
+    if (message.topic && message.data) {
+      // Extract topic
+      const topic = message.topic;
+      
+      // Process different private topics
+      switch (topic) {
+        case 'execution':
+          this.processExecutionData(message.data);
+          break;
+        case 'position':
+          this.processPositionData(message.data);
+          break;
+        case 'order':
+          this.processOrderData(message.data);
+          break;
+        default:
+          this.logger.debug(`Received unknown private topic: ${topic}`);
+      }
+    }
+  } catch (error) {
+    this.logger.error(`Error processing private WebSocket message: ${error.message}`);
+    // Log the raw message for debugging
+    this.logger.debug(`Raw message data: ${data}`);
   }
+}
   
   /**
    * Process kline data
