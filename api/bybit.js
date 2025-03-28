@@ -9,8 +9,17 @@ class ByBitAPI {
     this.logger = loggerModule.getLogger();
     
     this.baseUrl = config.api.testnet ? 'https://api-testnet.bybit.com' : config.api.baseUrl;
-    this.apiKey = config.api.apiKey;
-    this.apiSecret = config.api.apiSecret;
+    this.apiKey = process.env.BYBIT_API_KEY || config.api.apiKey;
+    this.apiSecret = process.env.BYBIT_API_SECRET || config.api.apiSecret;
+    
+    // Check if API keys are present
+    if (!this.apiKey || !this.apiSecret) {
+      this.logger.error('API keys not found. Please check your .env file or config.js');
+    }
+    
+    this.logger.debug(`Using API endpoint: ${this.baseUrl}`);
+    this.logger.debug(`API Key present: ${this.apiKey ? 'Yes' : 'No'}`);
+    this.logger.debug(`API Secret present: ${this.apiSecret ? 'Yes' : 'No'}`);
     
     this.axios = axios.create({
       baseURL: this.baseUrl,
@@ -25,18 +34,56 @@ class ByBitAPI {
   async init() {
     try {
       // Test API connection by fetching server time
+      this.logger.info('Testing connection to ByBit API...');
       const { data } = await this.publicRequest('/v5/market/time');
+      
+      this.logger.debug('Server time response: ' + JSON.stringify(data));
+      
       if (!data || !data.result || !data.result.timeSecond) {
+        this.logger.error('Invalid response from ByBit API: ' + JSON.stringify(data));
         throw new Error('Invalid response from ByBit API');
       }
       
+      this.logger.info(`ByBit server time: ${new Date(data.result.timeSecond * 1000).toISOString()}`);
+      
       // Check account info
-      const accountInfo = await this.getAccountInfo();
-      this.logger.info(`Connected to ByBit account with ${accountInfo.totalEquity} USDT equity`);
+      this.logger.info('Getting account information...');
+      try {
+        const accountInfo = await this.getAccountInfo();
+        this.logger.info(`Connected to ByBit account with ${accountInfo.totalEquity} USDT equity`);
+      } catch (accountError) {
+        this.logger.error(`Failed to get account info: ${accountError.message}`);
+        
+        // If we can connect to the API but can't get account info, likely an auth issue
+        if (accountError.message.includes('Invalid API key') || 
+            accountError.message.includes('Invalid signature') ||
+            accountError.message.includes('Unauthorized')) {
+          throw new Error('Authentication failed. Please check your API key and secret');
+        }
+        
+        throw accountError;
+      }
       
       return true;
     } catch (error) {
       this.logger.error(`ByBit API initialization failed: ${error.message}`);
+      
+      if (error.response) {
+        this.logger.error(`Response status: ${error.response.status}`);
+        this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
+        
+        // Provide more helpful error messages based on status code
+        if (error.response.status === 403) {
+          throw new Error('API access forbidden. Your IP may be restricted or keys have insufficient permissions');
+        } else if (error.response.status === 401) {
+          throw new Error('API authentication failed. Check your API keys');
+        } else if (error.response.status === 429) {
+          throw new Error('Rate limit exceeded. Too many requests to ByBit API');
+        }
+      } else if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+        throw new Error('Cannot connect to ByBit API. Check your internet connection or API endpoint');
+      }
+      
       throw error;
     }
   }
@@ -78,6 +125,45 @@ class ByBitAPI {
     } catch (error) {
       this.handleApiError(error, 'Public request failed', endpoint, params);
       throw error;
+    }
+  }
+
+   // Additional helper method to verify API key
+   async verifyApiKey() {
+    try {
+      const timestamp = Date.now().toString();
+      const recv_window = '5000';
+      const queryString = `api_key=${this.apiKey}&recv_window=${recv_window}&timestamp=${timestamp}`;
+      const signature = crypto.createHmac('sha256', this.apiSecret).update(queryString).digest('hex');
+      
+      const response = await this.axios.get('/v5/user/query-api', {
+        params: {
+          api_key: this.apiKey,
+          recv_window: recv_window,
+          timestamp: timestamp,
+          sign: signature
+        }
+      });
+      
+      if (response.data && response.data.ret_code === 0) {
+        this.logger.info('API key verification successful');
+        return {
+          valid: true,
+          data: response.data.result
+        };
+      } else {
+        this.logger.error(`API key verification failed: ${response.data.ret_msg}`);
+        return {
+          valid: false,
+          message: response.data.ret_msg
+        };
+      }
+    } catch (error) {
+      this.logger.error(`API key verification error: ${error.message}`);
+      return {
+        valid: false,
+        message: error.message
+      };
     }
   }
   

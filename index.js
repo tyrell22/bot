@@ -33,6 +33,49 @@ async function init() {
   // Check API keys
   if (!config.api.apiKey || !config.api.apiSecret) {
     logger.error('API key and secret are required. Please check your environment variables.');
+    logger.info('Make sure you have a .env file with BYBIT_API_KEY and BYBIT_API_SECRET defined.');
+    process.exit(1);
+  }
+  
+  // Initialize ByBit connection
+  try {
+    // Add a simple test API call first
+    try {
+      logger.info('Testing basic connectivity to ByBit API...');
+      const axios = require('axios');
+      const response = await axios.get(`${config.api.baseUrl}/v5/market/time`);
+      logger.info(`Basic connectivity test successful: ${JSON.stringify(response.data)}`);
+    } catch (connectError) {
+      logger.error(`Basic connectivity test failed: ${connectError.message}`);
+      logger.error('Check your internet connection and firewall settings');
+      process.exit(1);
+    }
+    
+    // Now try with the API module
+    await bybit.init();
+    logger.info('ByBit API connection established');
+  } catch (error) {
+    logger.error(`Failed to initialize ByBit API: ${error.message}`);
+    
+    // Additional suggestions based on error
+    if (error.message.includes('Authentication failed') || error.message.includes('Invalid API key')) {
+      logger.error('POSSIBLE SOLUTIONS:');
+      logger.error('1. Check that your API keys are correctly copied without extra spaces or characters');
+      logger.error('2. Verify that your API keys have the correct permissions (Trading, Reading, etc.)');
+      logger.error('3. If using testnet, ensure you have configured testnet: true in config.js');
+      logger.error('4. Check if your keys are expired or have been revoked in ByBit');
+    } else if (error.message.includes('connect')) {
+      logger.error('CONNECTIVITY ISSUES:');
+      logger.error('1. Check your internet connection');
+      logger.error('2. Verify that you can reach ByBit\'s API in your browser');
+      logger.error('3. Check if you need to use a proxy or VPN to access ByBit');
+    } else if (error.message.includes('timeout')) {
+      logger.error('API TIMEOUT:');
+      logger.error('1. ByBit servers might be experiencing high load');
+      logger.error('2. Your internet connection might be unstable');
+      logger.error('3. Consider increasing the timeout value in config.js');
+    }
+    
     process.exit(1);
   }
   
