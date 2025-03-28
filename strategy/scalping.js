@@ -42,6 +42,7 @@ class ScalpingStrategy extends EventEmitter {
  * @param {string} dataType - Type of data update
  * @param {Object} data - The data update
  */
+
 update(dataType, data) {
   try {
     if (!data || !data.symbol) {
@@ -50,7 +51,6 @@ update(dataType, data) {
     }
     
     const { symbol } = data;
-    logger.info(`Received ${dataType} update for ${symbol}`);
     
     // Initialize symbol data structure if needed
     if (!this.symbolData[symbol]) {
@@ -63,69 +63,71 @@ update(dataType, data) {
       logger.info(`Added new symbol to analysis list: ${symbol}`);
     }
     
-    // Update symbol data with detailed error handling
-    try {
-      switch (dataType) {
-        case 'kline':
-          if (!data.timeframe || !data.data) {
-            logger.info(`Invalid kline data for ${symbol}: missing timeframe or data`);
-            return;
-          }
-          this.symbolData[symbol].klines[data.timeframe] = data.data;
-          logger.info(`Updated klines for ${symbol} (${data.timeframe}): ${data.data.length} candles`);
-          break;
-          
-        case 'orderbook':
-          if (!data.data || !data.data.bids || !data.data.asks) {
-            logger.info(`Invalid orderbook data for ${symbol}: missing fields`);
-            return;
-          }
-          this.symbolData[symbol].orderbook = data.data;
-          logger.info(`Updated orderbook for ${symbol}: ${data.data.bids.length} bids, ${data.data.asks.length} asks`);
-          break;
-          
-        case 'ticker':
-          if (!data.data || typeof data.data.lastPrice === 'undefined') {
-            logger.info(`Invalid ticker data for ${symbol}: missing lastPrice`);
-            return;
-          }
-          this.symbolData[symbol].ticker = data.data;
-          logger.info(`Updated ticker for ${symbol}: price ${data.data.lastPrice}`);
-          break;
-          
-        default:
-          logger.info(`Unknown data type: ${dataType}`);
+    // Update symbol data
+    switch (dataType) {
+      case 'kline':
+        if (!data.timeframe || !data.data) {
+          logger.info(`Invalid kline data for ${symbol}: missing timeframe or data`);
           return;
-      }
-    } catch (dataError) {
-      logger.info(`Error updating ${dataType} data for ${symbol}: ${dataError.message}`);
-      return;
+        }
+        this.symbolData[symbol].klines[data.timeframe] = data.data;
+        logger.info(`Updated klines for ${symbol} (${data.timeframe}): ${data.data.length} candles`);
+        break;
+          
+      case 'orderbook':
+        if (!data.data || !data.data.bids || !data.data.asks) {
+          logger.info(`Invalid orderbook data for ${symbol}: missing fields`);
+          return;
+        }
+        this.symbolData[symbol].orderbook = data.data;
+        logger.info(`Updated orderbook for ${symbol}: ${data.data.bids.length} bids, ${data.data.asks.length} asks`);
+        break;
+          
+      case 'ticker':
+        if (!data.data || typeof data.data.lastPrice === 'undefined') {
+          logger.info(`Invalid ticker data for ${symbol}: missing lastPrice`);
+          return;
+        }
+        this.symbolData[symbol].ticker = data.data;
+        logger.info(`Updated ticker for ${symbol}: price ${data.data.lastPrice}`);
+        break;
+          
+      default:
+        logger.info(`Unknown data type: ${dataType}`);
+        return;
     }
     
     // Track symbols for analysis
     this.analyzedSymbols.add(symbol);
+    
+    // IMPORTANT: Check if we have all required data BEFORE triggering analysis
+    const hasAllData = this.hasRequiredData(this.symbolData[symbol], symbol);
+    if (!hasAllData) {
+      logger.info(`${symbol}: Not triggering analysis yet, waiting for all required data`);
+      return;
+    }
     
     // Throttle analysis to avoid excessive CPU usage
     const now = Date.now();
     const cooldownPeriod = 1000; // 1 second between analyses for same symbol
     
     if (now - this.symbolData[symbol].lastAnalysis > cooldownPeriod) {
-      logger.info(`Triggering analysis for ${symbol}`);
+      logger.info(`Triggering analysis for ${symbol} - all required data is present`);
       this.symbolData[symbol].lastAnalysis = now;
       
-      // Use try-catch here as well to ensure errors in analyzeSymbol don't crash the update method
       try {
         this.analyzeSymbol(symbol);
       } catch (analysisError) {
-        logger.info(`Unhandled error in analyzeSymbol for ${symbol}: ${analysisError.message}`);
-        logger.info(analysisError.stack);
+        logger.error(`Unhandled error in analyzeSymbol for ${symbol}: ${analysisError.message}`);
       }
     }
   } catch (error) {
-    logger.info(`Critical error in update method: ${error.message}`);
-    logger.info(error.stack);
+    logger.error(`Critical error in update method: ${error.message}`);
   }
 }
+    
+    
+    
 
 /**
  * Check if we have all required data for analysis with info-level logging

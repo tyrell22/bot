@@ -239,15 +239,18 @@ class WebSocketManager extends EventEmitter {
   /**
    * Subscribe to klines (candlesticks)
    */
+  
   subscribeToKlines(symbols) {
     const args = [];
     
-    // Build args for subscribing to multiple timeframes for each symbol
+    
     for (const symbol of symbols) {
       for (const timeframe of config.timeframes) {
-        args.push(`kline.${timeframe}.${symbol}`);
+        args.push(`kline.${timeframe}.${symbol}`);  
       }
     }
+    
+    logger.info(`Subscribing to klines with args: ${JSON.stringify(args)}`);
     
     const subscribeMsg = {
       op: 'subscribe',
@@ -255,14 +258,17 @@ class WebSocketManager extends EventEmitter {
     };
     
     this.send('public', subscribeMsg);
-    this.logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
+    logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
   }
-  
   /**
    * Subscribe to orderbooks
    */
   subscribeToOrderbooks(symbols) {
+    // Add more detailed format for the orderbook subscription
     const args = symbols.map(symbol => `orderbook.${config.orderbook.depth}.${symbol}`);
+    
+    // Add logging before sending
+    logger.info(`Subscribing to orderbooks with args: ${JSON.stringify(args)}`);
     
     const subscribeMsg = {
       op: 'subscribe',
@@ -270,7 +276,7 @@ class WebSocketManager extends EventEmitter {
     };
     
     this.send('public', subscribeMsg);
-    this.logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
+    logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
   }
   
   /**
@@ -321,50 +327,56 @@ class WebSocketManager extends EventEmitter {
     }
   }
   
-  /**
-   * Handle public WebSocket messages
-   */
-  handlePublicMessage(data) {
-    try {
-      const message = JSON.parse(data);
-      
-      // Handle ping/pong
-      if (message.op === 'pong') {
-        this.logger.debug('Received pong from public WebSocket');
-        return;
-      }
-      
-      // Handle subscription response
-      if (message.op === 'subscribe') {
-        this.logger.debug(`Subscription to ${message.args} successful`);
-        return;
-      }
-      
-      // Handle data message
-      if (message.topic && message.data) {
-        // Extract topic parts
-        const topicParts = message.topic.split('.');
-        const dataType = topicParts[0];
-        
-        // Process different data types
-        switch (dataType) {
-          case 'kline':
-            this.processKlineData(message);
-            break;
-          case 'orderbook':
-            this.processOrderbookData(message);
-            break;
-          case 'tickers':
-            this.processTickerData(message);
-            break;
-          default:
-            this.logger.debug(`Received unknown topic: ${message.topic}`);
-        }
-      }
-    } catch (error) {
-      this.logger.error(`Error processing public WebSocket message: ${error.message}`);
+// Modified handlePublicMessage function
+handlePublicMessage(data) {
+  try {
+    const message = JSON.parse(data);
+    
+    
+    
+    // Handle ping/pong
+    if (message.op === 'pong') {
+      this.logger.debug('Received pong from public WebSocket');
+      return;
     }
+    
+    // Handle subscription response
+    if (message.op === 'subscribe') {
+      this.logger.debug(`Subscription to ${message.args} successful`);
+      return;
+    }
+    
+    // Handle data message
+    if (message.topic && message.data) {
+      // Extract topic parts and log
+      const topicParts = message.topic.split('.');
+      const dataType = topicParts[0];
+     
+      
+      // Process different data types
+      switch (dataType) {
+        case 'kline':
+          
+          this.processKlineData(message);
+          break;
+        case 'orderbook':
+          this.processOrderbookData(message);
+          break;
+        case 'tickers':
+          this.processTickerData(message);
+          break;
+        default:
+          this.logger.debug(`Received unknown topic: ${message.topic}`);
+      }
+    } else {
+      logger.info(`Received message without topic or data: ${JSON.stringify(message)}`);
+    }
+  } catch (error) {
+    this.logger.error(`Error processing public WebSocket message: ${error.message}`);
+    // Also log the raw message
+    logger.error(`Raw message that caused error: ${data}`);
   }
+}
   
   /**
  * Handle private WebSocket messages
@@ -430,222 +442,231 @@ handlePrivateMessage(data) {
    * Process kline data
    */
   processKlineData(message) {
-    // Verify required properties exist
-    if (!message || !message.topic || !message.data) {
-      this.logger.warn('Received invalid kline data');
-      return;
-    }
-
-    const topicParts = message.topic.split('.');
-    if (topicParts.length < 3) {
-      this.logger.warn(`Received invalid kline topic: ${message.topic}`);
-      return;
-    }
-
-    const timeframe = topicParts[1];
-    const symbol = topicParts[2];
-    const data = message.data;
-    
-    // Initialize storage for this symbol and timeframe if needed
-    if (!this.marketData.klines) {
-      this.marketData.klines = {};
-    }
-    
-    if (!this.marketData.klines[symbol]) {
-      this.marketData.klines[symbol] = {};
-    }
-    
-    if (!this.marketData.klines[symbol][timeframe]) {
-      this.marketData.klines[symbol][timeframe] = [];
-    }
-    
-    // Store the latest klines
-    // For delta, we update the existing data
-    if (message.type === 'delta' && Array.isArray(data) && data.length > 0) {
-      // Update the latest candle
-      const kline = data[0];
-      
-      // Validate kline data structure
-      if (!kline || !kline.start || kline.open === undefined || kline.high === undefined ||
-          kline.low === undefined || kline.close === undefined || kline.volume === undefined) {
-        this.logger.warn(`Received invalid kline data for ${symbol}`);
+    try {
+      // Verify required properties exist
+      if (!message || !message.topic || !message.data) {
+        this.logger.warn('Received invalid kline data');
         return;
       }
-      
-      const formattedKline = {
-        timestamp: kline.start,
-        open: parseFloat(kline.open),
-        high: parseFloat(kline.high),
-        low: parseFloat(kline.low),
-        close: parseFloat(kline.close),
-        volume: parseFloat(kline.volume),
-        turnover: parseFloat(kline.turnover)
-      };
-      
-      // Find and update the existing candle or add a new one
-      const existingIndex = this.marketData.klines[symbol][timeframe].findIndex(
-        k => k.timestamp === formattedKline.timestamp
-      );
-      
-      if (existingIndex !== -1) {
-        this.marketData.klines[symbol][timeframe][existingIndex] = formattedKline;
-      } else {
-        this.marketData.klines[symbol][timeframe].push(formattedKline);
-        // Keep array sorted by timestamp
-        this.marketData.klines[symbol][timeframe].sort((a, b) => a.timestamp - b.timestamp);
+  
+      const topicParts = message.topic.split('.');
+      if (topicParts.length < 3) {
+        this.logger.warn(`Received invalid kline topic: ${message.topic}`);
+        return;
       }
-    } 
-    // For snapshot, we replace the entire dataset
-    else if (message.type === 'snapshot' && Array.isArray(data)) {
-      // Validate each kline in the data
-      const validatedKlines = data
-        .filter(kline => kline && kline.start && kline.open !== undefined && 
-                kline.high !== undefined && kline.low !== undefined && 
-                kline.close !== undefined && kline.volume !== undefined)
-        .map(kline => ({
-          timestamp: kline.start,
-          open: parseFloat(kline.open),
-          high: parseFloat(kline.high),
-          low: parseFloat(kline.low),
-          close: parseFloat(kline.close),
-          volume: parseFloat(kline.volume),
-          turnover: parseFloat(kline.turnover)
+  
+      const timeframe = topicParts[1];
+      const symbol = topicParts[2];
+      const data = message.data;
+      
+      // Initialize storage for this symbol and timeframe if needed
+      if (!this.marketData.klines) {
+        this.marketData.klines = {};
+      }
+      
+      if (!this.marketData.klines[symbol]) {
+        this.marketData.klines[symbol] = {};
+      }
+      
+      if (!this.marketData.klines[symbol][timeframe]) {
+        this.marketData.klines[symbol][timeframe] = [];
+      }
+      
+      // For ByBit V5 API, the format might be different
+      // Check both formats (array and object)
+      if (Array.isArray(data)) {
+        // Format the candles
+        const formattedKlines = data.map(kline => ({
+          timestamp: typeof kline.start !== 'undefined' ? kline.start : kline[0],
+          open: parseFloat(typeof kline.open !== 'undefined' ? kline.open : kline[1]),
+          high: parseFloat(typeof kline.high !== 'undefined' ? kline.high : kline[2]),
+          low: parseFloat(typeof kline.low !== 'undefined' ? kline.low : kline[3]),
+          close: parseFloat(typeof kline.close !== 'undefined' ? kline.close : kline[4]),
+          volume: parseFloat(typeof kline.volume !== 'undefined' ? kline.volume : kline[5]),
+          turnover: parseFloat(typeof kline.turnover !== 'undefined' ? kline.turnover : kline[6] || 0)
         }));
         
-      this.marketData.klines[symbol][timeframe] = validatedKlines;
+        this.marketData.klines[symbol][timeframe] = formattedKlines;
+      } 
+      // Handle single candle update
+      else if (typeof data === 'object') {
+        const kline = {
+          timestamp: typeof data.start !== 'undefined' ? data.start : data.t || Date.now(),
+          open: parseFloat(typeof data.open !== 'undefined' ? data.open : data.o || 0),
+          high: parseFloat(typeof data.high !== 'undefined' ? data.high : data.h || 0),
+          low: parseFloat(typeof data.low !== 'undefined' ? data.low : data.l || 0),
+          close: parseFloat(typeof data.close !== 'undefined' ? data.close : data.c || 0),
+          volume: parseFloat(typeof data.volume !== 'undefined' ? data.volume : data.v || 0),
+          turnover: parseFloat(typeof data.turnover !== 'undefined' ? data.turnover : data.V || 0)
+        };
+        
+        // Find and update existing candle or add new one
+        const existingIndex = this.marketData.klines[symbol][timeframe].findIndex(
+          k => k.timestamp === kline.timestamp
+        );
+        
+        if (existingIndex !== -1) {
+          this.marketData.klines[symbol][timeframe][existingIndex] = kline;
+        } else {
+          this.marketData.klines[symbol][timeframe].push(kline);
+          // Keep array sorted by timestamp
+          this.marketData.klines[symbol][timeframe].sort((a, b) => a.timestamp - b.timestamp);
+        }
+        
+        this.logger.info(`Updated single kline for ${symbol} on ${timeframe}`);
+      }
+      
+      // Emit the updated kline event
+      this.emit('kline', {
+        symbol,
+        timeframe,
+        data: this.marketData.klines[symbol][timeframe]
+      });
+    } catch (error) {
+      this.logger.error(`Error processing kline data: ${error.message}`);
+      this.logger.error(`Error data: ${JSON.stringify(message)}`);
     }
-    
-    // Limit the kline history to a reasonable amount
-    const maxKlines = 500;
-    if (this.marketData.klines[symbol][timeframe].length > maxKlines) {
-      this.marketData.klines[symbol][timeframe] = this.marketData.klines[symbol][timeframe].slice(
-        -maxKlines
-      );
-    }
-    
-    // Emit the updated kline event
-    this.emit('kline', {
-      symbol,
-      timeframe,
-      data: this.marketData.klines[symbol][timeframe]
-    });
   }
   
-  /**
-   * Process orderbook data
-   */
   processOrderbookData(message) {
-    // Verify required properties exist
-    if (!message || !message.topic || !message.data) {
-      this.logger.warn('Received invalid orderbook data');
-      return;
-    }
-
-    const topicParts = message.topic.split('.');
-    if (topicParts.length < 3) {
-      this.logger.warn(`Received invalid orderbook topic: ${message.topic}`);
-      return;
-    }
-
-    const depth = topicParts[1];
-    const symbol = topicParts[2];
-    const data = message.data;
-    
-    // Initialize storage for this symbol if needed
-    if (!this.marketData.orderbooks) {
-      this.marketData.orderbooks = {};
-    }
-    
-    // For snapshot, we replace the entire orderbook
-    if (message.type === 'snapshot' && data && data.ts && Array.isArray(data.b) && Array.isArray(data.a)) {
-      this.marketData.orderbooks[symbol] = {
-        symbol,
-        timestamp: data.ts,
-        bids: data.b.map(bid => ({
-          price: parseFloat(bid[0]),
-          quantity: parseFloat(bid[1])
-        })),
-        asks: data.a.map(ask => ({
-          price: parseFloat(ask[0]),
-          quantity: parseFloat(ask[1])
-        }))
-      };
-    } 
-    // For delta, we update the existing orderbook
-    else if (message.type === 'delta' && data && data.ts) {
-      if (!this.marketData.orderbooks[symbol]) {
-        this.logger.warn(`Received orderbook delta for ${symbol} without having a snapshot first`);
+    try {
+      // Verify required properties exist
+      if (!message || !message.topic || !message.data) {
+        this.logger.warn('Received invalid orderbook data');
+        return;
+      }
+  
+      const topicParts = message.topic.split('.');
+      if (topicParts.length < 3) {
+        this.logger.warn(`Received invalid orderbook topic: ${message.topic}`);
+        return;
+      }
+  
+      const depth = topicParts[1];
+      const symbol = topicParts[2];
+      const data = message.data;
+      
+      // Initialize storage for this symbol if needed
+      if (!this.marketData.orderbooks) {
+        this.marketData.orderbooks = {};
+      }
+      
+      // For ByBit V5 API, most updates are deltas
+      if (message.type === 'delta') {
+        
+        
+        // If we don't have an orderbook yet, create one
+        if (!this.marketData.orderbooks[symbol]) {
+          this.marketData.orderbooks[symbol] = {
+            symbol,
+            timestamp: message.ts || data.ts || Date.now(),
+            bids: [],
+            asks: []
+          };
+          this.logger.info(`Created new orderbook for ${symbol}`);
+        }
+        
+        const orderbook = this.marketData.orderbooks[symbol];
+        orderbook.timestamp = message.ts || data.ts || Date.now();
+        
+        // Process bids
+        if (Array.isArray(data.b)) {
+          for (const bid of data.b) {
+            if (!Array.isArray(bid) || bid.length < 2) continue;
+            
+            const price = parseFloat(bid[0]);
+            const quantity = parseFloat(bid[1]);
+            
+            // Remove or update
+            if (quantity === 0) {
+              orderbook.bids = orderbook.bids.filter(b => b.price !== price);
+            } else {
+              const index = orderbook.bids.findIndex(b => b.price === price);
+              if (index >= 0) {
+                orderbook.bids[index].quantity = quantity;
+              } else {
+                orderbook.bids.push({ price, quantity });
+              }
+            }
+          }
+          
+          // Sort bids
+          orderbook.bids.sort((a, b) => b.price - a.price);
+          
+        }
+        
+        // Process asks
+        if (Array.isArray(data.a)) {
+          for (const ask of data.a) {
+            if (!Array.isArray(ask) || ask.length < 2) continue;
+            
+            const price = parseFloat(ask[0]);
+            const quantity = parseFloat(ask[1]);
+            
+            // Remove or update
+            if (quantity === 0) {
+              orderbook.asks = orderbook.asks.filter(a => a.price !== price);
+            } else {
+              const index = orderbook.asks.findIndex(a => a.price === price);
+              if (index >= 0) {
+                orderbook.asks[index].quantity = quantity;
+              } else {
+                orderbook.asks.push({ price, quantity });
+              }
+            }
+          }
+          
+          // Sort asks
+          orderbook.asks.sort((a, b) => a.price - b.price);
+          this.logger.debug(`Updated asks for ${symbol}, now have ${orderbook.asks.length} asks`);
+        }
+        
+        // Always emit the update, even if we just received a delta
+        this.emit('orderbook', {
+          symbol,
+          data: orderbook
+        });
+        
         return;
       }
       
-      const orderbook = this.marketData.orderbooks[symbol];
-      orderbook.timestamp = data.ts;
-      
-      // Update bids
-      if (Array.isArray(data.b) && data.b.length > 0) {
-        for (const bid of data.b) {
-          if (bid.length < 2) continue; // Skip invalid entries
-          
-          const price = parseFloat(bid[0]);
-          const quantity = parseFloat(bid[1]);
-          
-          // Remove price level if quantity is 0
-          if (quantity === 0) {
-            orderbook.bids = orderbook.bids.filter(b => b.price !== price);
-          } else {
-            // Update existing price level or add new one
-            const existingBid = orderbook.bids.find(b => b.price === price);
-            if (existingBid) {
-              existingBid.quantity = quantity;
-            } else {
-              orderbook.bids.push({ price, quantity });
-            }
-          }
+      // Handle snapshot updates (though ByBit V5 mostly uses deltas)
+      if (message.type === 'snapshot') {
+        this.logger.info(`Processing snapshot for ${symbol} orderbook`);
+        
+        if (!data || !Array.isArray(data.b) || !Array.isArray(data.a)) {
+          this.logger.warn(`Invalid snapshot data for ${symbol}`);
+          return;
         }
         
-        // Sort bids (descending)
-        orderbook.bids.sort((a, b) => b.price - a.price);
-      }
-      
-      // Update asks
-      if (Array.isArray(data.a) && data.a.length > 0) {
-        for (const ask of data.a) {
-          if (ask.length < 2) continue; // Skip invalid entries
-          
-          const price = parseFloat(ask[0]);
-          const quantity = parseFloat(ask[1]);
-          
-          // Remove price level if quantity is 0
-          if (quantity === 0) {
-            orderbook.asks = orderbook.asks.filter(a => a.price !== price);
-          } else {
-            // Update existing price level or add new one
-            const existingAsk = orderbook.asks.find(a => a.price === price);
-            if (existingAsk) {
-              existingAsk.quantity = quantity;
-            } else {
-              orderbook.asks.push({ price, quantity });
-            }
-          }
-        }
+        this.marketData.orderbooks[symbol] = {
+          symbol,
+          timestamp: message.ts || data.ts || Date.now(),
+          bids: data.b.map(bid => ({
+            price: parseFloat(bid[0]),
+            quantity: parseFloat(bid[1])
+          })),
+          asks: data.a.map(ask => ({
+            price: parseFloat(ask[0]),
+            quantity: parseFloat(ask[1])
+          }))
+        };
         
-        // Sort asks (ascending)
-        orderbook.asks.sort((a, b) => a.price - b.price);
+        this.logger.info(`Created orderbook snapshot for ${symbol} with ${data.b.length} bids and ${data.a.length} asks`);
+        
+        // Emit the updated orderbook
+        this.emit('orderbook', {
+          symbol,
+          data: this.marketData.orderbooks[symbol]
+        });
       }
-    }
-    
-    // Emit the updated orderbook event if we have valid data
-    if (this.marketData.orderbooks[symbol]) {
-      this.emit('orderbook', {
-        symbol,
-        data: this.marketData.orderbooks[symbol]
-      });
+    } catch (error) {
+      this.logger.error(`Error processing orderbook data: ${error.message}`);
+      this.logger.error(`Message that caused error: ${JSON.stringify(message)}`);
     }
   }
   
-  /**
-   * Process ticker data
-   */
+  
 /**
  * Process ticker data
  */

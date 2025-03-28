@@ -23,10 +23,10 @@ module.exports = {
   },
   
   // Timeframes to analyze
-  timeframes: ['1m', '5m', '15m'],
+  timeframes: ['1', '5', '15'],
   
   // Main timeframe for signals
-  mainTimeframe: '1m',
+  mainTimeframe: '1',
   
   // Symbols to trade (will be overridden by dynamic selection)
   // These are default fallbacks
@@ -39,7 +39,7 @@ module.exports = {
   ],
   
   // Number of top symbols by volume to track
-  topSymbolsCount: 50,
+  topSymbolsCount: 1,
   
   // Indicators configuration
   indicators: {
