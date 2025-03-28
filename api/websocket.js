@@ -646,72 +646,88 @@ handlePrivateMessage(data) {
   /**
    * Process ticker data
    */
-  processTickerData(message) {
-    if (!message || !message.topic || !message.data) {
-      this.logger.warn('Received invalid ticker data');
-      this.logger.debug(`Raw message: ${JSON.stringify(message)}`);
-      return;
-    }
-  
-    const topicParts = message.topic.split('.');
-    if (topicParts.length < 2) {
-      this.logger.warn(`Received invalid ticker topic: ${message.topic}`);
-      this.logger.info(`Raw message: ${JSON.stringify(message)}`);
-      return;
-    }
-  
-    const symbol = topicParts[1];
-    const data = message.data;
-  
-    // Log raw data for every message
-    this.logger.info(`Raw ticker data for ${symbol}: ${JSON.stringify(data)}`);
-  
-    // Determine a lastPrice from available fields
-    let lastPrice;
-    if (data.lastPrice) {
-      lastPrice = parseFloat(data.lastPrice);
-    } else if (data.bid1Price && data.ask1Price) {
-      lastPrice = (parseFloat(data.bid1Price) + parseFloat(data.ask1Price)) / 2;
-      this.logger.info(`Calculated lastPrice for ${symbol} from bid/ask: ${lastPrice}`);
-    } else if (data.bid1Price) {
-      lastPrice = parseFloat(data.bid1Price);
-      this.logger.debug(`Using bid1Price as lastPrice for ${symbol}: ${lastPrice}`);
-    } else if (data.ask1Price) {
-      lastPrice = parseFloat(data.ask1Price);
-      this.logger.info(`Using ask1Price as lastPrice for ${symbol}: ${lastPrice}`);
-    } else {
-      this.logger.warn(`Received invalid ticker data for ${symbol} - no usable price field`);
-      return;
-    }
-  
-    // Initialize storage
-    if (!this.marketData.tickers) {
-      this.marketData.tickers = {};
-    }
-  
-    // Process with fallback values
-    this.marketData.tickers[symbol] = {
-      symbol,
-      lastPrice,
-      highPrice24h: data.highPrice24h ? parseFloat(data.highPrice24h) : 0,
-      lowPrice24h: data.lowPrice24h ? parseFloat(data.lowPrice24h) : 0,
-      volume24h: data.volume24h ? parseFloat(data.volume24h) : 0, // Fallback to 0 if missing
-      turnover24h: data.turnover24h ? parseFloat(data.turnover24h) : 0,
-      price24hPcnt: data.price24hPcnt != null ? parseFloat(data.price24hPcnt) : 0,
-      timestamp: Date.now(),
-      bidPrice: data.bid1Price ? parseFloat(data.bid1Price) : null,
-      askPrice: data.ask1Price ? parseFloat(data.ask1Price) : null,
-      bidSize: data.bid1Size ? parseFloat(data.bid1Size) : null,
-      askSize: data.ask1Size ? parseFloat(data.ask1Size) : null
-    };
-  
-    // Warn if key fields are missing
-    if (!data.highPrice24h || !data.lowPrice24h || !data.price24hPcnt || !data.volume24h) {
-      this.logger.warn(`Partial ticker data for ${symbol} - missing some expected fields`);
-    }
-  
-    this.emit('ticker', { symbol, data: this.marketData.tickers[symbol] });
+/**
+ * Process ticker data
+ */
+processTickerData(message) {
+  if (!message || !message.topic || !message.data) {
+    this.logger.warn('Received invalid ticker data');
+    this.logger.info(`Raw message: ${JSON.stringify(message)}`);
+    return;
   }
+
+  const topicParts = message.topic.split('.');
+  if (topicParts.length < 2) {
+    this.logger.warn(`Received invalid ticker topic: ${message.topic}`);
+    this.logger.info(`Raw message: ${JSON.stringify(message)}`);
+    return;
+  }
+
+  const symbol = topicParts[1];
+  const data = message.data;
+
+  // Initialize storage
+  if (!this.marketData.tickers) {
+    this.marketData.tickers = {};
+  }
+
+  // Get existing ticker or create new one
+  const existingTicker = this.marketData.tickers[symbol] || {
+    symbol,
+    lastPrice: 0,
+    highPrice24h: 0,
+    lowPrice24h: 0,
+    volume24h: 0,
+    turnover24h: 0,
+    price24hPcnt: 0,
+    timestamp: Date.now(),
+    bidPrice: null,
+    askPrice: null,
+    bidSize: null,
+    askSize: null
+  };
+
+  // Determine a lastPrice from available fields
+  if (data.lastPrice) {
+    existingTicker.lastPrice = parseFloat(data.lastPrice);
+  } else if (data.bid1Price && data.ask1Price) {
+    // Calculate mid price if no lastPrice is available
+    const midPrice = (parseFloat(data.bid1Price) + parseFloat(data.ask1Price)) / 2;
+    existingTicker.lastPrice = midPrice;
+  } else if (existingTicker.lastPrice === 0 && data.bid1Price) {
+    existingTicker.lastPrice = parseFloat(data.bid1Price);
+  } else if (existingTicker.lastPrice === 0 && data.ask1Price) {
+    existingTicker.lastPrice = parseFloat(data.ask1Price);
+  }
+
+  // Update only the fields that are present in the current message
+  if (data.highPrice24h) existingTicker.highPrice24h = parseFloat(data.highPrice24h);
+  if (data.lowPrice24h) existingTicker.lowPrice24h = parseFloat(data.lowPrice24h);
+  if (data.volume24h) existingTicker.volume24h = parseFloat(data.volume24h);
+  if (data.turnover24h) existingTicker.turnover24h = parseFloat(data.turnover24h);
+  if (data.price24hPcnt) existingTicker.price24hPcnt = parseFloat(data.price24hPcnt);
+  if (data.bid1Price) existingTicker.bidPrice = parseFloat(data.bid1Price);
+  if (data.ask1Price) existingTicker.askPrice = parseFloat(data.ask1Price);
+  if (data.bid1Size) existingTicker.bidSize = parseFloat(data.bid1Size);
+  if (data.ask1Size) existingTicker.askSize = parseFloat(data.ask1Size);
+  
+  // Always update timestamp
+  existingTicker.timestamp = Date.now();
+
+  // Save updated ticker
+  this.marketData.tickers[symbol] = existingTicker;
+
+  // Only log the ticker once fully populated
+  const isMissingEssentialData = !existingTicker.highPrice24h || 
+                                !existingTicker.lowPrice24h || 
+                                !existingTicker.volume24h;
+  
+  if (isMissingEssentialData && message.type === 'snapshot') {
+    this.logger.warn(`Incomplete ticker snapshot for ${symbol} - missing some expected fields`);
+  }
+
+  this.emit('ticker', { symbol, data: existingTicker });
+}
   
   /**
    * Process execution data

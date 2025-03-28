@@ -33,26 +33,7 @@ class ByBitAPI {
   
   async init() {
     try {
-     
-  
-      // Test basic connectivity
-      this.logger.info('Testing connection to ByBit API...');
-      const response = await this.publicRequest('/v5/market/time');
-      
-      // Log the full response for debugging
-      this.logger.info(`Full response object: ${JSON.stringify(response)}`);
-      this.logger.info('Server time response: ' + JSON.stringify(response));
-      
-      // Validate response structure
-      if (!response || !response.result || !response.result.timeSecond) {
-        this.logger.error('Invalid response from ByBit API: ' + JSON.stringify(response));
-        throw new Error('Invalid response from ByBit API');
-      }
-      
-      // Log server time
-      const serverTime = new Date(parseInt(response.result.timeSecond) * 1000).toISOString();
-      this.logger.info(`ByBit server time: ${serverTime}`);
-      
+           
       // Check account information
       this.logger.info('Getting account information...');
       try {
@@ -133,7 +114,7 @@ class ByBitAPI {
   async publicRequest(endpoint, params = {}) {
     try {
       const response = await axios.get(`${this.baseUrl}${endpoint}`, { params });
-      this.logger.info(`Response data: ${JSON.stringify(response.data)}`);
+      this.logger.debug(`Response data: ${JSON.stringify(response.data)}`);
       return response.data;
     } catch (error) {
       this.logger.error(`Raw error: ${error.message}`);
@@ -246,28 +227,47 @@ class ByBitAPI {
   }
   
   /**
-   * Get account information
-   */
-  async getAccountInfo() {
-    const { result } = await this.privateRequest('/v5/account/wallet-balance', 'GET', { accountType: 'UNIFIED' });
-    
-    if (!result || !result.list || result.list.length === 0) {
-      throw new Error('Failed to fetch account information');
-    }
-    
-    const account = result.list[0];
-    const usdtCoin = account.coin.find(c => c.coin === 'USDT');
-    
-    if (!usdtCoin) {
-      throw new Error('No USDT balance found in account');
-    }
-    
-    return {
-      totalEquity: usdtCoin.equity,
-      availableBalance: usdtCoin.availableBalance,
-      totalWalletBalance: usdtCoin.walletBalance
-    };
+ * Get account information with correctly calculated available balance
+ * @returns {Object} Account information with calculated balances
+ */
+async getAccountInfo() {
+  const { result } = await this.privateRequest('/v5/account/wallet-balance', 'GET', { accountType: 'UNIFIED' });
+  
+  if (!result || !result.list || result.list.length === 0) {
+    throw new Error('Failed to fetch account information');
   }
+  
+  const account = result.list[0];
+  
+  // Find USDT coin data
+  const usdtCoin = account.coin.find(c => c.coin === 'USDT');
+  
+  if (!usdtCoin) {
+    throw new Error('No USDT balance found in account');
+  }
+  
+  // Calculate available balance correctly
+  // Available balance = Wallet Balance - Total Position Initial Margin - Total Order Initial Margin
+  const walletBalance = parseFloat(usdtCoin.walletBalance || 0);
+  const totalPositionIM = parseFloat(usdtCoin.totalPositionIM || 0);
+  const totalOrderIM = parseFloat(usdtCoin.totalOrderIM || 0);
+  
+  const calculatedAvailableBalance = walletBalance - totalPositionIM - totalOrderIM;
+  
+  this.logger.debug(`USDT wallet balance: ${walletBalance}`);
+  this.logger.debug(`USDT position margin: ${totalPositionIM}`);
+  this.logger.debug(`USDT order margin: ${totalOrderIM}`);
+  this.logger.debug(`Calculated available balance: ${calculatedAvailableBalance}`);
+  
+  return {
+    totalEquity: usdtCoin.equity || walletBalance,
+    availableBalance: calculatedAvailableBalance,
+    totalWalletBalance: walletBalance,
+    totalPositionIM: totalPositionIM,
+    totalOrderIM: totalOrderIM,
+    unrealisedPnl: parseFloat(usdtCoin.unrealisedPnl || 0)
+  };
+}
   
   /**
    * Get market tickers for all symbols or a specific symbol

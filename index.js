@@ -39,18 +39,6 @@ async function init() {
   
   // Initialize ByBit connection
   try {
-    // Add a simple test API call first
-    try {
-      logger.info('Testing basic connectivity to ByBit API...');
-      const axios = require('axios');
-      const response = await axios.get(`${config.api.baseUrl}/v5/market/time`);
-      logger.info(`Basic connectivity test successful: ${JSON.stringify(response.data)}`);
-    } catch (connectError) {
-      logger.error(`Basic connectivity test failed: ${connectError.message}`);
-      logger.error('Check your internet connection and firewall settings');
-      process.exit(1);
-    }
-    
     // Now try with the API module
     await bybit.init();
     logger.info('ByBit API connection established');
