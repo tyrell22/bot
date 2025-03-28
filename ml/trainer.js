@@ -1,11 +1,14 @@
 /**
  * Machine Learning model trainer
  * Trains and improves the ML model based on trade outcomes
+ * Uses browser-based TensorFlow.js
  */
-const tf = require('@tensorflow/tfjs-node');
+const tf = require('@tensorflow/tfjs');
 const dataCollector = require('../data/collector');
 const storage = require('../data/storage');
 const config = require('../config');
+const fs = require('fs-extra');
+const path = require('path');
 
 class MLTrainer {
   constructor() {
@@ -85,8 +88,10 @@ class MLTrainer {
    */
   async loadModel() {
     try {
-      const modelPath = `file://${config.storage.modelPath}/model`;
-      const model = await tf.loadLayersModel(modelPath);
+      const tfUtils = require('./utils');
+      
+      // Load model using utility function
+      const model = await tfUtils.loadModelFromDisk(config.storage.modelPath);
       
       // Recompile model
       model.compile({
@@ -198,9 +203,12 @@ class MLTrainer {
    */
   async saveModel() {
     try {
-      const modelPath = `file://${config.storage.modelPath}/model`;
-      await this.model.save(modelPath);
-      logger.info(`Model saved to ${modelPath}`);
+      const tfUtils = require('./utils');
+      
+      // Save model using utility function
+      await tfUtils.saveModelToDisk(this.model, config.storage.modelPath);
+      
+      logger.info(`Model saved to ${config.storage.modelPath}`);
       return true;
     } catch (error) {
       logger.error(`Error saving model: ${error.message}`);

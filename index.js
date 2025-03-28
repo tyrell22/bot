@@ -70,10 +70,10 @@ async function init() {
   // Initialize strategy coordinator
   strategyCoordinator.init(wsManager, dataCollector);
   
-  // Initialize ML model
+  // Initialize ML model - with error handling for TensorFlow.js
   try {
     await mlTrainer.init();
-    logger.info('Machine learning model initialized');
+    logger.info('Machine learning model initialized with TensorFlow.js');
     
     // Schedule periodic training
     setInterval(async () => {
@@ -86,6 +86,7 @@ async function init() {
     }, config.ml.trainingFrequency * 60 * 60 * 1000);
   } catch (error) {
     logger.warn(`Failed to initialize ML model: ${error.message}`);
+    logger.warn('Bot will continue to operate without ML capabilities');
   }
   
   // Schedule regular backups

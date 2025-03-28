@@ -1,224 +1,295 @@
 /**
- * Machine Learning predictor module
- * Makes predictions on new trading opportunities
+ * Machine Learning model trainer
+ * Trains and improves the ML model based on trade outcomes
+ * Uses browser-based TensorFlow.js
  */
-const mlTrainer = require('./trainer');
+const tf = require('@tensorflow/tfjs');
 const dataCollector = require('../data/collector');
+const storage = require('../data/storage');
 const config = require('../config');
+const fs = require('fs-extra');
+const path = require('path');
 
-class MLPredictor {
+class MLTrainer {
   constructor() {
-    this.recentPredictions = [];
-    this.maxPredictionsHistory = 100;
+    this.model = null;
+    this.initialized = false;
+    this.featureNames = [
+      'vwapDeviation', 'aboveVwap',
+      'rsi', 'rsiOverbought', 'rsiOversold',
+      'emaFastAboveMedium', 'emaFastAboveSlow', 'emaMediumAboveSlow',
+      'macdAboveSignal', 'macdPositive',
+      'orderbookImbalance', 'orderbookScore',
+      'direction'
+    ];
   }
   
   /**
-   * Predict success likelihood for a trading signal
-   * @param {Object} signal - Trading signal
-   * @returns {Object} - Prediction results
+   * Initialize the ML trainer
    */
-  async predict(signal) {
+  async init() {
     try {
-      const { symbol, direction, indicators } = signal;
+      // Try to load existing model
+      try {
+        this.model = await this.loadModel();
+        logger.info('Loaded existing ML model');
+      } catch (error) {
+        logger.info('No existing model found, creating new model');
+        this.model = this.createModel();
+      }
       
-      // If ML model is not ready, return neutral prediction
-      if (!mlTrainer.initialized || !mlTrainer.model) {
+      this.initialized = true;
+      logger.info('ML trainer initialized');
+      
+      return true;
+    } catch (error) {
+      logger.error(`Error initializing ML trainer: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  /**
+   * Create a new model
+   * @returns {tf.Sequential} - New TensorFlow model
+   */
+  createModel() {
+    const model = tf.sequential();
+    
+    // Add layers
+    model.add(tf.layers.dense({
+      units: 16,
+      activation: 'relu',
+      inputShape: [this.featureNames.length]
+    }));
+    
+    model.add(tf.layers.dense({
+      units: 8,
+      activation: 'relu'
+    }));
+    
+    model.add(tf.layers.dense({
+      units: 1,
+      activation: 'sigmoid'
+    }));
+    
+    // Compile model
+    model.compile({
+      optimizer: tf.train.adam(0.001),
+      loss: 'binaryCrossentropy',
+      metrics: ['accuracy']
+    });
+    
+    return model;
+  }
+  
+  /**
+   * Load model from storage
+   * @returns {tf.Sequential} - Loaded model
+   */
+  async loadModel() {
+    try {
+      const tfUtils = require('./utils');
+      
+      // Load model using utility function
+      const model = await tfUtils.loadModelFromDisk(config.storage.modelPath);
+      
+      // Recompile model
+      model.compile({
+        optimizer: tf.train.adam(0.001),
+        loss: 'binaryCrossentropy',
+        metrics: ['accuracy']
+      });
+      
+      return model;
+    } catch (error) {
+      logger.warn(`Error loading model: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  /**
+   * Prepare data for training
+   * @param {Array} dataset - Trade dataset
+   * @returns {Object} - Tensors for training
+   */
+  prepareTrainingData(dataset) {
+    // Extract features and targets
+    const featureArrays = dataset.map(item => {
+      return this.featureNames.map(name => item.features[name] || 0);
+    });
+    
+    const targetArrays = dataset.map(item => item.target);
+    
+    // Convert to tensors
+    const xsTensor = tf.tensor2d(featureArrays);
+    const ysTensor = tf.tensor2d(targetArrays, [targetArrays.length, 1]);
+    
+    return {
+      xs: xsTensor,
+      ys: ysTensor,
+      numExamples: featureArrays.length
+    };
+  }
+  
+  /**
+   * Train the model with new data
+   * @returns {Object} - Training results
+   */
+  async train() {
+    if (!this.initialized) {
+      throw new Error('ML trainer not initialized');
+    }
+    
+    try {
+      // Get dataset from data collector
+      const dataset = dataCollector.prepareMLDataset();
+      
+      if (dataset.length < config.ml.minTradesForTraining) {
+        logger.info(`Not enough trades for training (${dataset.length}/${config.ml.minTradesForTraining})`);
         return {
-          valid: false,
-          message: 'ML model not initialized',
-          confidence: 0.5
+          trained: false,
+          reason: 'Not enough trades',
+          tradesCount: dataset.length,
+          requiredCount: config.ml.minTradesForTraining
         };
       }
       
-      // Extract features from indicators
-      const features = this.extractFeatures(symbol, direction, indicators);
+      // Prepare data
+      const { xs, ys, numExamples } = this.prepareTrainingData(dataset);
       
-      // Make prediction
-      const prediction = await mlTrainer.predict(features);
+      logger.info(`Training model with ${numExamples} examples`);
       
-      // Store prediction for later analysis
-      this.storePrediction({
-        symbol,
-        direction,
-        timestamp: Date.now(),
-        signalStrength: signal.strength,
-        confidence: prediction.confidence,
-        features
+      // Train model
+      const result = await this.model.fit(xs, ys, {
+        epochs: config.ml.epochs,
+        batchSize: 32,
+        validationSplit: config.ml.validationSplit,
+        shuffle: true,
+        callbacks: {
+          onEpochEnd: (epoch, logs) => {
+            logger.debug(`Epoch ${epoch + 1}: loss = ${logs.loss.toFixed(4)}, accuracy = ${logs.acc.toFixed(4)}`);
+          }
+        }
       });
       
+      // Save model
+      await this.saveModel();
+      
+      // Clean up tensors
+      xs.dispose();
+      ys.dispose();
+      
+      const finalLoss = result.history.loss[result.history.loss.length - 1];
+      const finalAcc = result.history.acc[result.history.acc.length - 1];
+      
+      logger.info(`Model training completed. Final loss: ${finalLoss.toFixed(4)}, accuracy: ${finalAcc.toFixed(4)}`);
+      
       return {
-        valid: true,
-        confidence: prediction.confidence,
-        prediction: prediction.prediction === 1 ? 'BUY' : 'SELL',
-        features
+        trained: true,
+        loss: finalLoss,
+        accuracy: finalAcc,
+        epochs: config.ml.epochs,
+        examplesCount: numExamples
       };
     } catch (error) {
-      logger.error(`Error making ML prediction: ${error.message}`);
-      
-      // Return neutral prediction on error
-      return {
-        valid: false,
-        message: `Prediction error: ${error.message}`,
-        confidence: 0.5
-      };
+      logger.error(`Error training model: ${error.message}`);
+      throw error;
     }
   }
   
   /**
-   * Extract features from signal indicators
-   * @param {string} symbol - Trading symbol
-   * @param {string} direction - Trade direction
-   * @param {Object} indicators - Signal indicators
-   * @returns {Object} - Extracted features
+   * Save model to storage
+   * @returns {boolean} - Whether the save was successful
    */
-  extractFeatures(symbol, direction, indicators) {
+  async saveModel() {
     try {
-      // Get features from data collector if available
-      const collectedFeatures = dataCollector.getFeatures(symbol);
+      const tfUtils = require('./utils');
       
-      // VWAP features
-      const vwapFeatures = indicators.vwap && indicators.vwap.comparison ? {
-        vwapDeviation: indicators.vwap.comparison.percentDeviation,
-        aboveVwap: indicators.vwap.comparison.aboveVwap ? 1 : 0
-      } : {
-        vwapDeviation: 0,
-        aboveVwap: 0
-      };
+      // Save model using utility function
+      await tfUtils.saveModelToDisk(this.model, config.storage.modelPath);
       
-      // RSI features
-      const rsiFeatures = indicators.rsi && indicators.rsi.conditions ? {
-        rsi: indicators.rsi.conditions.rsi,
-        rsiOverbought: indicators.rsi.conditions.overbought ? 1 : 0,
-        rsiOversold: indicators.rsi.conditions.oversold ? 1 : 0
-      } : {
-        rsi: 50,
-        rsiOverbought: 0,
-        rsiOversold: 0
-      };
+      logger.info(`Model saved to ${config.storage.modelPath}`);
+      return true;
+    } catch (error) {
+      logger.error(`Error saving model: ${error.message}`);
+      return false;
+    }
+  }
+  
+  /**
+   * Make predictions with the model
+   * @param {Array} features - Input features
+   * @returns {Object} - Prediction results
+   */
+  async predict(features) {
+    if (!this.initialized || !this.model) {
+      throw new Error('ML trainer not initialized or model not loaded');
+    }
+    
+    try {
+      // Preprocess features to match expected format
+      const processedFeatures = this.featureNames.map(name => features[name] || 0);
       
-      // EMA features
-      const emaFeatures = indicators.ema && indicators.ema.crossovers ? {
-        emaFastAboveMedium: indicators.ema.crossovers.fastMediumBullish ? 1 : 0,
-        emaFastAboveSlow: indicators.ema.crossovers.fastSlowBullish ? 1 : 0,
-        emaMediumAboveSlow: indicators.ema.crossovers.mediumSlowBullish ? 1 : 0
-      } : {
-        emaFastAboveMedium: 0,
-        emaFastAboveSlow: 0,
-        emaMediumAboveSlow: 0
-      };
+      // Convert to tensor
+      const inputTensor = tf.tensor2d([processedFeatures]);
       
-      // MACD features
-      const macdFeatures = indicators.macd && indicators.macd.current ? {
-        macdAboveSignal: indicators.macd.current.MACD > indicators.macd.current.signal ? 1 : 0,
-        macdPositive: indicators.macd.current.MACD > 0 ? 1 : 0
-      } : {
-        macdAboveSignal: 0,
-        macdPositive: 0
-      };
+      // Make prediction
+      const predictionTensor = this.model.predict(inputTensor);
+      const predictionValue = await predictionTensor.data();
+      const confidence = predictionValue[0];
       
-      // Orderbook features
-      const orderbookFeatures = indicators.orderbook ? {
-        orderbookImbalance: indicators.orderbook.imbalances && indicators.orderbook.imbalances.valid ? 
-          indicators.orderbook.imbalances.imbalanceRatio : 1,
-        orderbookScore: indicators.orderbook.overallScore || 0
-      } : {
-        orderbookImbalance: 1,
-        orderbookScore: 0
-      };
+      // Clean up tensors
+      inputTensor.dispose();
+      predictionTensor.dispose();
       
-      // Direction features
-      const directionFeatures = {
-        direction: direction === 'BUY' ? 1 : 0
-      };
-      
-      // Combine all features
       return {
-        ...vwapFeatures,
-        ...rsiFeatures,
-        ...emaFeatures,
-        ...macdFeatures,
-        ...orderbookFeatures,
-        ...directionFeatures
+        confidence,
+        prediction: confidence > 0.5 ? 1 : 0,
+        features: processedFeatures
       };
     } catch (error) {
-      logger.error(`Error extracting features: ${error.message}`);
+      logger.error(`Error making prediction: ${error.message}`);
+      throw error;
+    }
+  }
+  
+  /**
+   * Evaluate the model on a test dataset
+   * @param {Array} testDataset - Test dataset
+   * @returns {Object} - Evaluation results
+   */
+  async evaluate(testDataset) {
+    if (!this.initialized || !this.model) {
+      throw new Error('ML trainer not initialized or model not loaded');
+    }
+    
+    try {
+      // Prepare test data
+      const { xs, ys, numExamples } = this.prepareTrainingData(testDataset);
       
-      // Return default features on error
+      // Evaluate model
+      const evaluation = await this.model.evaluate(xs, ys);
+      
+      // Get metrics
+      const loss = await evaluation[0].data();
+      const accuracy = await evaluation[1].data();
+      
+      // Clean up tensors
+      xs.dispose();
+      ys.dispose();
+      evaluation[0].dispose();
+      evaluation[1].dispose();
+      
       return {
-        vwapDeviation: 0,
-        aboveVwap: 0,
-        rsi: 50,
-        rsiOverbought: 0,
-        rsiOversold: 0,
-        emaFastAboveMedium: 0,
-        emaFastAboveSlow: 0,
-        emaMediumAboveSlow: 0,
-        macdAboveSignal: 0,
-        macdPositive: 0,
-        orderbookImbalance: 1,
-        orderbookScore: 0,
-        direction: direction === 'BUY' ? 1 : 0
+        loss: loss[0],
+        accuracy: accuracy[0],
+        numExamples
       };
+    } catch (error) {
+      logger.error(`Error evaluating model: ${error.message}`);
+      throw error;
     }
-  }
-  
-  /**
-   * Store prediction for later analysis
-   * @param {Object} prediction - The prediction to store
-   */
-  storePrediction(prediction) {
-    this.recentPredictions.push(prediction);
-    
-    // Limit history size
-    if (this.recentPredictions.length > this.maxPredictionsHistory) {
-      this.recentPredictions.shift();
-    }
-  }
-  
-  /**
-   * Get recent predictions
-   * @param {number} limit - Number of predictions to return
-   * @returns {Array} - Recent predictions
-   */
-  getRecentPredictions(limit = 10) {
-    return this.recentPredictions
-      .slice(-limit)
-      .sort((a, b) => b.timestamp - a.timestamp);
-  }
-  
-  /**
-   * Get prediction statistics
-   * @returns {Object} - Prediction statistics
-   */
-  getPredictionStats() {
-    if (this.recentPredictions.length === 0) {
-      return {
-        count: 0,
-        avgConfidence: 0,
-        buyCount: 0,
-        sellCount: 0
-      };
-    }
-    
-    let totalConfidence = 0;
-    let buyCount = 0;
-    
-    for (const pred of this.recentPredictions) {
-      totalConfidence += pred.confidence;
-      if (pred.direction === 'BUY') {
-        buyCount++;
-      }
-    }
-    
-    return {
-      count: this.recentPredictions.length,
-      avgConfidence: totalConfidence / this.recentPredictions.length,
-      buyCount,
-      sellCount: this.recentPredictions.length - buyCount,
-      buyPercentage: (buyCount / this.recentPredictions.length) * 100,
-      sellPercentage: ((this.recentPredictions.length - buyCount) / this.recentPredictions.length) * 100
-    };
   }
 }
 
-module.exports = new MLPredictor();
+module.exports = new MLTrainer();

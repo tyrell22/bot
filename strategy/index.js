@@ -1,6 +1,7 @@
 /**
  * Strategy coordinator module
  * Manages all strategies and coordinates trade execution
+ * Updated to handle browser-based TensorFlow.js
  */
 const config = require('../config');
 const scalping = require('./scalping');
@@ -20,6 +21,7 @@ class StrategyCoordinator {
       startTime: Date.now(),
       maxPerHour: config.trading.maxTradesPerHour
     };
+    this.mlEnabled = true;
   }
   
   /**
@@ -41,6 +43,16 @@ class StrategyCoordinator {
     
     // Setup event listeners for strategy signals
     this.setupEventListeners();
+    
+    // Check if ML is available - attempt a prediction to verify
+    mlPredictor.predict({
+      symbol: 'BTCUSDT',
+      direction: 'BUY',
+      indicators: {}
+    }).catch(error => {
+      logger.warn(`ML prediction test failed, disabling ML: ${error.message}`);
+      this.mlEnabled = false;
+    });
     
     logger.info('Strategy coordinator initialized with ' + this.activeStrategies.length + ' strategies');
     
@@ -116,20 +128,39 @@ class StrategyCoordinator {
         return;
       }
       
-      // Run the signal through ML model if available
+      // Run the signal through ML model if available and enabled
       let mlConfidence = 0.5; // Default neutral
-      try {
-        const mlPrediction = await mlPredictor.predict(signal);
-        if (mlPrediction.valid) {
-          mlConfidence = mlPrediction.confidence;
-          logger.debug(`ML confidence for ${signal.symbol} ${signal.direction}: ${mlConfidence.toFixed(2)}`);
+      let skipMlCheck = false;
+      
+      if (this.mlEnabled) {
+        try {
+          const mlPrediction = await mlPredictor.predict(signal);
+          if (mlPrediction.valid) {
+            mlConfidence = mlPrediction.confidence;
+            logger.debug(`ML confidence for ${signal.symbol} ${signal.direction}: ${mlConfidence.toFixed(2)}`);
+          } else {
+            // If ML prediction failed but returned a message, log and continue
+            logger.debug(`ML prediction returned invalid result: ${mlPrediction.message}`);
+            skipMlCheck = true;
+          }
+        } catch (error) {
+          logger.warn(`ML prediction error: ${error.message}`);
+          skipMlCheck = true;
+          
+          // If we encounter errors repeatedly, disable ML
+          if (error.message.includes('model') || error.message.includes('tensor')) {
+            logger.warn('Disabling ML predictions due to persistent errors');
+            this.mlEnabled = false;
+          }
         }
-      } catch (error) {
-        logger.warn(`ML prediction error: ${error.message}`);
+      } else {
+        // ML is disabled, skip the check
+        skipMlCheck = true;
+        logger.debug('ML predictions disabled, skipping ML confidence check');
       }
       
-      // Only execute trades with sufficient confidence
-      if (mlConfidence < config.ml.predictThreshold) {
+      // Only check ML confidence if ML check is not skipped
+      if (!skipMlCheck && mlConfidence < config.ml.predictThreshold) {
         logger.info(`ML confidence (${mlConfidence.toFixed(2)}) below threshold (${config.ml.predictThreshold}) for ${signal.symbol}, skipping signal`);
         return;
       }
@@ -138,7 +169,11 @@ class StrategyCoordinator {
       this.tradeCounter++;
       this.tradeLimiter.count++;
       
-      logger.info(`Executing trade #${this.tradeCounter} for ${signal.symbol} - ${signal.direction} (ML confidence: ${mlConfidence.toFixed(2)})`);
+      if (this.mlEnabled && !skipMlCheck) {
+        logger.info(`Executing trade #${this.tradeCounter} for ${signal.symbol} - ${signal.direction} (ML confidence: ${mlConfidence.toFixed(2)})`);
+      } else {
+        logger.info(`Executing trade #${this.tradeCounter} for ${signal.symbol} - ${signal.direction} (without ML verification)`);
+      }
       
       await tradeExecutor.executeSignal(signal);
     } catch (error) {
