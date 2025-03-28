@@ -635,21 +635,22 @@ class WebSocketManager extends EventEmitter {
   
   /**
    * Close all WebSocket connections
+   * Changed from static to instance method to fix access to instance properties
    */
-  static async closeAll() {
-    const manager = this;
-    
-    for (const [name, ws] of Object.entries(manager.connections)) {
+  async closeAll() {
+    for (const [name, ws] of Object.entries(this.connections)) {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
         logger.info(`Closing ${name} WebSocket connection`);
         ws.close();
       }
       
-      if (manager.pingTimeouts[name]) {
-        clearInterval(manager.pingTimeouts[name]);
+      if (this.pingTimeouts[name]) {
+        clearInterval(this.pingTimeouts[name]);
       }
     }
     
     return true;
   }
 }
+
+module.exports = WebSocketManager;
