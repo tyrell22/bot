@@ -1,8 +1,13 @@
 /**
  * Orderbook analysis module for trading signals
  */
+const loggerModule = require('../utils/logger');
+
 class OrderbookAnalyzer {
   constructor() {
+    // Get logger instance
+    this.logger = loggerModule.getLogger();
+    
     this.orderbookHistory = {}; // Keep track of recent orderbooks for analysis
     this.maxHistoryLength = 30; // Keep last 30 snapshots for analysis
   }
@@ -11,6 +16,11 @@ class OrderbookAnalyzer {
    * Update the orderbook history with new data
    */
   updateOrderbookHistory(symbol, orderbook) {
+    if (!orderbook || !orderbook.bids || !orderbook.asks) {
+      this.logger.warn(`Invalid orderbook data provided for ${symbol}`);
+      return;
+    }
+    
     if (!this.orderbookHistory[symbol]) {
       this.orderbookHistory[symbol] = [];
     }
@@ -206,10 +216,21 @@ class OrderbookAnalyzer {
     const spreads = this.orderbookHistory[symbol]
       .slice(-windowSize)
       .map(ob => {
+        if (!ob.bids || !ob.bids[0] || !ob.asks || !ob.asks[0]) {
+          return null;
+        }
         const bestBid = ob.bids[0]?.price || 0;
         const bestAsk = ob.asks[0]?.price || 0;
         return bestAsk - bestBid;
-      });
+      })
+      .filter(spread => spread !== null);
+    
+    if (spreads.length < windowSize / 2) {
+      return {
+        valid: false,
+        message: 'Too many invalid orderbook entries'
+      };
+    }
     
     // Calculate average spread
     const avgSpread = spreads.reduce((sum, spread) => sum + spread, 0) / spreads.length;
@@ -259,6 +280,11 @@ class OrderbookAnalyzer {
       const prevOb = history[i - 1];
       const currOb = history[i];
       
+      // Skip invalid entries
+      if (!prevOb.bids || !prevOb.asks || !currOb.bids || !currOb.asks) {
+        continue;
+      }
+      
       const prevBidVolume = prevOb.bids.reduce((sum, bid) => sum + bid.quantity, 0);
       const currBidVolume = currOb.bids.reduce((sum, bid) => sum + bid.quantity, 0);
       
@@ -269,14 +295,28 @@ class OrderbookAnalyzer {
       askVolumeChanges.push(currAskVolume - prevAskVolume);
     }
     
+    if (bidVolumeChanges.length === 0 || askVolumeChanges.length === 0) {
+      return {
+        valid: false,
+        message: 'Could not calculate volume changes from history'
+      };
+    }
+    
     // Calculate aggregated changes
     const netBidVolumeChange = bidVolumeChanges.reduce((sum, change) => sum + change, 0);
     const netAskVolumeChange = askVolumeChanges.reduce((sum, change) => sum + change, 0);
     
     // Determine trend
     const totalVolumeChange = Math.abs(netBidVolumeChange) + Math.abs(netAskVolumeChange);
-    const bidChangeRatio = netBidVolumeChange / totalVolumeChange;
-    const askChangeRatio = netAskVolumeChange / totalVolumeChange;
+    
+    // Avoid division by zero
+    let bidChangeRatio = 0;
+    let askChangeRatio = 0;
+    
+    if (totalVolumeChange > 0) {
+      bidChangeRatio = netBidVolumeChange / totalVolumeChange;
+      askChangeRatio = netAskVolumeChange / totalVolumeChange;
+    }
     
     return {
       valid: true,
@@ -295,6 +335,17 @@ class OrderbookAnalyzer {
    * Get a comprehensive analysis of the orderbook for a symbol
    */
   getFullAnalysis(symbol, orderbook) {
+    if (!symbol || !orderbook) {
+      return {
+        valid: false,
+        message: 'Missing symbol or orderbook data',
+        symbol: symbol || 'unknown',
+        timestamp: Date.now(),
+        signal: 'NEUTRAL',
+        overallScore: 0
+      };
+    }
+    
     // Update history first
     this.updateOrderbookHistory(symbol, orderbook);
     

@@ -2,10 +2,14 @@ const WebSocket = require('ws');
 const crypto = require('crypto');
 const config = require('../config');
 const EventEmitter = require('events');
+const loggerModule = require('../utils/logger');
 
 class WebSocketManager extends EventEmitter {
   constructor() {
     super();
+    // Get logger instance
+    this.logger = loggerModule.getLogger();
+    
     this.connections = {};
     this.subscriptions = {};
     this.marketData = {};
@@ -43,7 +47,7 @@ class WebSocketManager extends EventEmitter {
       this.reconnectAttempts['public'] = 0;
       
       ws.on('open', () => {
-        logger.info('Public WebSocket connected');
+        this.logger.info('Public WebSocket connected');
         
         // Setup ping interval
         this.setupPingInterval('public');
@@ -65,14 +69,14 @@ class WebSocketManager extends EventEmitter {
       });
       
       ws.on('error', (error) => {
-        logger.error(`Public WebSocket error: ${error.message}`);
+        this.logger.error(`Public WebSocket error: ${error.message}`);
         if (!this.connected) {
           reject(error);
         }
       });
       
       ws.on('close', () => {
-        logger.warn('Public WebSocket closed');
+        this.logger.warn('Public WebSocket closed');
         clearInterval(this.pingTimeouts['public']);
         
         // Attempt to reconnect
@@ -86,7 +90,7 @@ class WebSocketManager extends EventEmitter {
    */
   async connectPrivateWebSocket() {
     if (!config.api.apiKey || !config.api.apiSecret) {
-      logger.warn('API credentials not provided, skipping private WebSocket connection');
+      this.logger.warn('API credentials not provided, skipping private WebSocket connection');
       return false;
     }
     
@@ -105,7 +109,7 @@ class WebSocketManager extends EventEmitter {
       this.reconnectAttempts['private'] = 0;
       
       ws.on('open', () => {
-        logger.info('Private WebSocket connected');
+        this.logger.info('Private WebSocket connected');
         
         // Setup ping interval
         this.setupPingInterval('private');
@@ -121,14 +125,14 @@ class WebSocketManager extends EventEmitter {
       });
       
       ws.on('error', (error) => {
-        logger.error(`Private WebSocket error: ${error.message}`);
+        this.logger.error(`Private WebSocket error: ${error.message}`);
         if (!this.connected) {
           reject(error);
         }
       });
       
       ws.on('close', () => {
-        logger.warn('Private WebSocket closed');
+        this.logger.warn('Private WebSocket closed');
         clearInterval(this.pingTimeouts['private']);
         
         // Attempt to reconnect
@@ -150,7 +154,7 @@ class WebSocketManager extends EventEmitter {
       if (ws && ws.readyState === WebSocket.OPEN) {
         const pingMessage = JSON.stringify({ op: 'ping' });
         ws.send(pingMessage);
-        logger.debug(`Sent ping to ${connectionName} WebSocket`);
+        this.logger.debug(`Sent ping to ${connectionName} WebSocket`);
       }
     }, this.pingInterval);
   }
@@ -161,18 +165,18 @@ class WebSocketManager extends EventEmitter {
   reconnectPublicWebSocket(symbols) {
     const connectionName = 'public';
     if (this.reconnectAttempts[connectionName] >= this.maxReconnectAttempts) {
-      logger.error('Maximum reconnect attempts reached for public WebSocket');
+      this.logger.error('Maximum reconnect attempts reached for public WebSocket');
       return;
     }
     
     this.reconnectAttempts[connectionName]++;
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts[connectionName]);
     
-    logger.info(`Attempting to reconnect public WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
+    this.logger.info(`Attempting to reconnect public WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
     
     setTimeout(() => {
       this.connectPublicWebSocket(symbols).catch(error => {
-        logger.error(`Failed to reconnect public WebSocket: ${error.message}`);
+        this.logger.error(`Failed to reconnect public WebSocket: ${error.message}`);
       });
     }, delay);
   }
@@ -183,18 +187,18 @@ class WebSocketManager extends EventEmitter {
   reconnectPrivateWebSocket() {
     const connectionName = 'private';
     if (this.reconnectAttempts[connectionName] >= this.maxReconnectAttempts) {
-      logger.error('Maximum reconnect attempts reached for private WebSocket');
+      this.logger.error('Maximum reconnect attempts reached for private WebSocket');
       return;
     }
     
     this.reconnectAttempts[connectionName]++;
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts[connectionName]);
     
-    logger.info(`Attempting to reconnect private WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
+    this.logger.info(`Attempting to reconnect private WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
     
     setTimeout(() => {
       this.connectPrivateWebSocket().catch(error => {
-        logger.error(`Failed to reconnect private WebSocket: ${error.message}`);
+        this.logger.error(`Failed to reconnect private WebSocket: ${error.message}`);
       });
     }, delay);
   }
@@ -218,7 +222,7 @@ class WebSocketManager extends EventEmitter {
     };
     
     this.send('public', subscribeMsg);
-    logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
+    this.logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
   }
   
   /**
@@ -233,7 +237,7 @@ class WebSocketManager extends EventEmitter {
     };
     
     this.send('public', subscribeMsg);
-    logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
+    this.logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
   }
   
   /**
@@ -248,7 +252,7 @@ class WebSocketManager extends EventEmitter {
     };
     
     this.send('public', subscribeMsg);
-    logger.info(`Subscribed to ticker data for ${symbols.length} symbols`);
+    this.logger.info(`Subscribed to ticker data for ${symbols.length} symbols`);
   }
   
   /**
@@ -261,7 +265,7 @@ class WebSocketManager extends EventEmitter {
     };
     
     this.send('private', subscribeMsg);
-    logger.info(`Subscribed to private topics: ${topics.join(', ')}`);
+    this.logger.info(`Subscribed to private topics: ${topics.join(', ')}`);
   }
   
   /**
@@ -270,7 +274,7 @@ class WebSocketManager extends EventEmitter {
   send(connectionName, data) {
     const ws = this.connections[connectionName];
     if (!ws || ws.readyState !== WebSocket.OPEN) {
-      logger.error(`Cannot send message: ${connectionName} WebSocket is not open`);
+      this.logger.error(`Cannot send message: ${connectionName} WebSocket is not open`);
       return false;
     }
     
@@ -279,7 +283,7 @@ class WebSocketManager extends EventEmitter {
       ws.send(message);
       return true;
     } catch (error) {
-      logger.error(`Failed to send message to ${connectionName} WebSocket: ${error.message}`);
+      this.logger.error(`Failed to send message to ${connectionName} WebSocket: ${error.message}`);
       return false;
     }
   }
@@ -293,13 +297,13 @@ class WebSocketManager extends EventEmitter {
       
       // Handle ping/pong
       if (message.op === 'pong') {
-        logger.debug('Received pong from public WebSocket');
+        this.logger.debug('Received pong from public WebSocket');
         return;
       }
       
       // Handle subscription response
       if (message.op === 'subscribe') {
-        logger.debug(`Subscription to ${message.args} successful`);
+        this.logger.debug(`Subscription to ${message.args} successful`);
         return;
       }
       
@@ -321,11 +325,11 @@ class WebSocketManager extends EventEmitter {
             this.processTickerData(message);
             break;
           default:
-            logger.debug(`Received unknown topic: ${message.topic}`);
+            this.logger.debug(`Received unknown topic: ${message.topic}`);
         }
       }
     } catch (error) {
-      logger.error(`Error processing public WebSocket message: ${error.message}`);
+      this.logger.error(`Error processing public WebSocket message: ${error.message}`);
     }
   }
   
@@ -338,13 +342,13 @@ class WebSocketManager extends EventEmitter {
       
       // Handle ping/pong
       if (message.op === 'pong') {
-        logger.debug('Received pong from private WebSocket');
+        this.logger.debug('Received pong from private WebSocket');
         return;
       }
       
       // Handle subscription response
       if (message.op === 'subscribe') {
-        logger.debug(`Subscription to ${message.args} successful`);
+        this.logger.debug(`Subscription to ${message.args} successful`);
         return;
       }
       
@@ -365,11 +369,11 @@ class WebSocketManager extends EventEmitter {
             this.processOrderData(message.data);
             break;
           default:
-            logger.debug(`Received unknown private topic: ${topic}`);
+            this.logger.debug(`Received unknown private topic: ${topic}`);
         }
       }
     } catch (error) {
-      logger.error(`Error processing private WebSocket message: ${error.message}`);
+      this.logger.error(`Error processing private WebSocket message: ${error.message}`);
     }
   }
   
@@ -377,7 +381,18 @@ class WebSocketManager extends EventEmitter {
    * Process kline data
    */
   processKlineData(message) {
+    // Verify required properties exist
+    if (!message || !message.topic || !message.data) {
+      this.logger.warn('Received invalid kline data');
+      return;
+    }
+
     const topicParts = message.topic.split('.');
+    if (topicParts.length < 3) {
+      this.logger.warn(`Received invalid kline topic: ${message.topic}`);
+      return;
+    }
+
     const timeframe = topicParts[1];
     const symbol = topicParts[2];
     const data = message.data;
@@ -397,9 +412,17 @@ class WebSocketManager extends EventEmitter {
     
     // Store the latest klines
     // For delta, we update the existing data
-    if (message.type === 'delta') {
+    if (message.type === 'delta' && Array.isArray(data) && data.length > 0) {
       // Update the latest candle
       const kline = data[0];
+      
+      // Validate kline data structure
+      if (!kline || !kline.start || kline.open === undefined || kline.high === undefined ||
+          kline.low === undefined || kline.close === undefined || kline.volume === undefined) {
+        this.logger.warn(`Received invalid kline data for ${symbol}`);
+        return;
+      }
+      
       const formattedKline = {
         timestamp: kline.start,
         open: parseFloat(kline.open),
@@ -424,16 +447,23 @@ class WebSocketManager extends EventEmitter {
       }
     } 
     // For snapshot, we replace the entire dataset
-    else if (message.type === 'snapshot') {
-      this.marketData.klines[symbol][timeframe] = data.map(kline => ({
-        timestamp: kline.start,
-        open: parseFloat(kline.open),
-        high: parseFloat(kline.high),
-        low: parseFloat(kline.low),
-        close: parseFloat(kline.close),
-        volume: parseFloat(kline.volume),
-        turnover: parseFloat(kline.turnover)
-      }));
+    else if (message.type === 'snapshot' && Array.isArray(data)) {
+      // Validate each kline in the data
+      const validatedKlines = data
+        .filter(kline => kline && kline.start && kline.open !== undefined && 
+                kline.high !== undefined && kline.low !== undefined && 
+                kline.close !== undefined && kline.volume !== undefined)
+        .map(kline => ({
+          timestamp: kline.start,
+          open: parseFloat(kline.open),
+          high: parseFloat(kline.high),
+          low: parseFloat(kline.low),
+          close: parseFloat(kline.close),
+          volume: parseFloat(kline.volume),
+          turnover: parseFloat(kline.turnover)
+        }));
+        
+      this.marketData.klines[symbol][timeframe] = validatedKlines;
     }
     
     // Limit the kline history to a reasonable amount
@@ -456,7 +486,18 @@ class WebSocketManager extends EventEmitter {
    * Process orderbook data
    */
   processOrderbookData(message) {
+    // Verify required properties exist
+    if (!message || !message.topic || !message.data) {
+      this.logger.warn('Received invalid orderbook data');
+      return;
+    }
+
     const topicParts = message.topic.split('.');
+    if (topicParts.length < 3) {
+      this.logger.warn(`Received invalid orderbook topic: ${message.topic}`);
+      return;
+    }
+
     const depth = topicParts[1];
     const symbol = topicParts[2];
     const data = message.data;
@@ -467,7 +508,7 @@ class WebSocketManager extends EventEmitter {
     }
     
     // For snapshot, we replace the entire orderbook
-    if (message.type === 'snapshot') {
+    if (message.type === 'snapshot' && data && data.ts && Array.isArray(data.b) && Array.isArray(data.a)) {
       this.marketData.orderbooks[symbol] = {
         symbol,
         timestamp: data.ts,
@@ -482,9 +523,9 @@ class WebSocketManager extends EventEmitter {
       };
     } 
     // For delta, we update the existing orderbook
-    else if (message.type === 'delta') {
+    else if (message.type === 'delta' && data && data.ts) {
       if (!this.marketData.orderbooks[symbol]) {
-        logger.warn(`Received orderbook delta for ${symbol} without having a snapshot first`);
+        this.logger.warn(`Received orderbook delta for ${symbol} without having a snapshot first`);
         return;
       }
       
@@ -492,8 +533,10 @@ class WebSocketManager extends EventEmitter {
       orderbook.timestamp = data.ts;
       
       // Update bids
-      if (data.b && data.b.length > 0) {
+      if (Array.isArray(data.b) && data.b.length > 0) {
         for (const bid of data.b) {
+          if (bid.length < 2) continue; // Skip invalid entries
+          
           const price = parseFloat(bid[0]);
           const quantity = parseFloat(bid[1]);
           
@@ -516,8 +559,10 @@ class WebSocketManager extends EventEmitter {
       }
       
       // Update asks
-      if (data.a && data.a.length > 0) {
+      if (Array.isArray(data.a) && data.a.length > 0) {
         for (const ask of data.a) {
+          if (ask.length < 2) continue; // Skip invalid entries
+          
           const price = parseFloat(ask[0]);
           const quantity = parseFloat(ask[1]);
           
@@ -540,20 +585,40 @@ class WebSocketManager extends EventEmitter {
       }
     }
     
-    // Emit the updated orderbook event
-    this.emit('orderbook', {
-      symbol,
-      data: this.marketData.orderbooks[symbol]
-    });
+    // Emit the updated orderbook event if we have valid data
+    if (this.marketData.orderbooks[symbol]) {
+      this.emit('orderbook', {
+        symbol,
+        data: this.marketData.orderbooks[symbol]
+      });
+    }
   }
   
   /**
    * Process ticker data
    */
   processTickerData(message) {
+    // Verify required properties exist
+    if (!message || !message.topic || !message.data) {
+      this.logger.warn('Received invalid ticker data');
+      return;
+    }
+
     const topicParts = message.topic.split('.');
+    if (topicParts.length < 2) {
+      this.logger.warn(`Received invalid ticker topic: ${message.topic}`);
+      return;
+    }
+
     const symbol = topicParts[1];
     const data = message.data;
+    
+    // Validate ticker data
+    if (!data || !data.lastPrice || !data.highPrice24h || !data.lowPrice24h || 
+        !data.volume24h || !data.turnover24h || data.price24hPcnt === undefined) {
+      this.logger.warn(`Received invalid ticker data for ${symbol}`);
+      return;
+    }
     
     // Initialize storage for tickers if needed
     if (!this.marketData.tickers) {
@@ -583,21 +648,36 @@ class WebSocketManager extends EventEmitter {
    * Process execution data
    */
   processExecutionData(data) {
-    this.emit('execution', data);
+    // Validate execution data before emitting
+    if (Array.isArray(data) && data.length > 0) {
+      this.emit('execution', data);
+    } else {
+      this.logger.warn('Received invalid execution data');
+    }
   }
   
   /**
    * Process position data
    */
   processPositionData(data) {
-    this.emit('position', data);
+    // Validate position data before emitting
+    if (Array.isArray(data) && data.length > 0) {
+      this.emit('position', data);
+    } else {
+      this.logger.warn('Received invalid position data');
+    }
   }
   
   /**
    * Process order data
    */
   processOrderData(data) {
-    this.emit('order', data);
+    // Validate order data before emitting
+    if (Array.isArray(data) && data.length > 0) {
+      this.emit('order', data);
+    } else {
+      this.logger.warn('Received invalid order data');
+    }
   }
   
   /**
@@ -635,12 +715,12 @@ class WebSocketManager extends EventEmitter {
   
   /**
    * Close all WebSocket connections
-   * Changed from static to instance method to fix access to instance properties
+   * Instance method to close all connections
    */
   async closeAll() {
     for (const [name, ws] of Object.entries(this.connections)) {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
-        logger.info(`Closing ${name} WebSocket connection`);
+        this.logger.info(`Closing ${name} WebSocket connection`);
         ws.close();
       }
       

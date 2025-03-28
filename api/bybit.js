@@ -1,9 +1,13 @@
 const axios = require('axios');
 const crypto = require('crypto');
 const config = require('../config');
+const loggerModule = require('../utils/logger');
 
 class ByBitAPI {
   constructor() {
+    // Get logger instance
+    this.logger = loggerModule.getLogger();
+    
     this.baseUrl = config.api.testnet ? 'https://api-testnet.bybit.com' : config.api.baseUrl;
     this.apiKey = config.api.apiKey;
     this.apiSecret = config.api.apiSecret;
@@ -28,11 +32,11 @@ class ByBitAPI {
       
       // Check account info
       const accountInfo = await this.getAccountInfo();
-      logger.info(`Connected to ByBit account with ${accountInfo.totalEquity} USDT equity`);
+      this.logger.info(`Connected to ByBit account with ${accountInfo.totalEquity} USDT equity`);
       
       return true;
     } catch (error) {
-      logger.error(`ByBit API initialization failed: ${error.message}`);
+      this.logger.error(`ByBit API initialization failed: ${error.message}`);
       throw error;
     }
   }
@@ -111,14 +115,14 @@ class ByBitAPI {
   handleApiError(error, message, endpoint, params) {
     if (error.response) {
       const { status, data } = error.response;
-      logger.error(`${message}: ${endpoint} - Status ${status}: ${JSON.stringify(data)}`);
+      this.logger.error(`${message}: ${endpoint} - Status ${status}: ${JSON.stringify(data)}`);
     } else if (error.request) {
-      logger.error(`${message}: ${endpoint} - No response received`);
+      this.logger.error(`${message}: ${endpoint} - No response received`);
     } else {
-      logger.error(`${message}: ${endpoint} - ${error.message}`);
+      this.logger.error(`${message}: ${endpoint} - ${error.message}`);
     }
     
-    logger.debug(`Request params: ${JSON.stringify(params)}`);
+    this.logger.debug(`Request params: ${JSON.stringify(params)}`);
   }
   
   /**
@@ -196,23 +200,33 @@ class ByBitAPI {
    * Get orderbook data
    */
   async getOrderBook(symbol, limit = 50) {
-    const { result } = await this.publicRequest('/v5/market/orderbook', {
-      symbol,
-      limit
-    });
-    
-    return {
-      symbol: result.symbol,
-      timestamp: result.timestamp,
-      bids: result.bids.map(bid => ({
-        price: parseFloat(bid[0]),
-        quantity: parseFloat(bid[1])
-      })),
-      asks: result.asks.map(ask => ({
-        price: parseFloat(ask[0]),
-        quantity: parseFloat(ask[1])
-      }))
-    };
+    try {
+      const { result } = await this.publicRequest('/v5/market/orderbook', {
+        symbol,
+        limit
+      });
+      
+      // Validate required data properties exist
+      if (!result || !result.symbol || !result.timestamp || !result.bids || !result.asks) {
+        throw new Error(`Invalid orderbook data received for ${symbol}`);
+      }
+      
+      return {
+        symbol: result.symbol,
+        timestamp: result.timestamp,
+        bids: result.bids.map(bid => ({
+          price: parseFloat(bid[0]),
+          quantity: parseFloat(bid[1])
+        })),
+        asks: result.asks.map(ask => ({
+          price: parseFloat(ask[0]),
+          quantity: parseFloat(ask[1])
+        }))
+      };
+    } catch (error) {
+      this.logger.error(`Error fetching orderbook for ${symbol}: ${error.message}`);
+      throw error;
+    }
   }
   
   /**

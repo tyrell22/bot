@@ -1,9 +1,15 @@
 const fs = require('fs-extra');
 const path = require('path');
-const winston = require('winston');
 const config = require('./config');
 
-// Import modules
+// Initialize logger first
+const loggerModule = require('./utils/logger');
+const logger = loggerModule.initializeLogger(config);
+
+// Make logger available globally
+global.logger = logger;
+
+// Import modules after logger is available
 const bybit = require('./api/bybit');
 const WebSocketManager = require('./api/websocket');
 const dataCollector = require('./data/collector');
@@ -13,38 +19,6 @@ const tradeManager = require('./trade/manager');
 const strategyCoordinator = require('./strategy/index');
 const mlTrainer = require('./ml/trainer');
 const storage = require('./data/storage');
-
-// Set up logging
-const logger = winston.createLogger({
-  level: config.logging.level,
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.printf(({ level, message, timestamp }) => {
-      return `${timestamp} ${level}: ${message}`;
-    })
-  ),
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.simple()
-      ),
-      silent: !config.logging.console
-    })
-  ]
-});
-
-if (config.logging.file) {
-  // Ensure log directory exists
-  fs.ensureDirSync(config.logging.filePath);
-  
-  logger.add(new winston.transports.File({
-    filename: path.join(config.logging.filePath, `bot-${new Date().toISOString().split('T')[0]}.log`)
-  }));
-}
-
-// Make logger available globally
-global.logger = logger;
 
 async function init() {
   // Ensure required directories exist
@@ -121,13 +95,13 @@ async function init() {
   }, config.storage.backupInterval * 60 * 60 * 1000);
   
   // Graceful shutdown
-  process.on('SIGINT', shutdown);
-  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', () => shutdown(wsManager));
+  process.on('SIGTERM', () => shutdown(wsManager));
   
   logger.info('Bot initialization complete, monitoring markets for scalping opportunities');
 }
 
-async function shutdown() {
+async function shutdown(wsManager) {
   logger.info('Shutting down...');
   
   // Close all open positions if configured to do so
@@ -138,9 +112,9 @@ async function shutdown() {
     logger.error(`Error closing positions: ${error.message}`);
   }
   
-  // Close WebSocket connections
+  // Close WebSocket connections (fixed to use the instance method)
   try {
-    await wsManager.closeAll()
+    await wsManager.closeAll();
     logger.info('WebSocket connections closed');
   } catch (error) {
     logger.error(`Error closing WebSocket connections: ${error.message}`);
