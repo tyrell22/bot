@@ -33,28 +33,37 @@ class ByBitAPI {
   
   async init() {
     try {
-      // Test API connection by fetching server time
+     
+  
+      // Test basic connectivity
       this.logger.info('Testing connection to ByBit API...');
-      const { data } = await this.publicRequest('/v5/market/time');
+      const response = await this.publicRequest('/v5/market/time');
       
-      this.logger.debug('Server time response: ' + JSON.stringify(data));
+      // Log the full response for debugging
+      this.logger.info(`Full response object: ${JSON.stringify(response)}`);
+      this.logger.info('Server time response: ' + JSON.stringify(response));
       
-      if (!data || !data.result || !data.result.timeSecond) {
-        this.logger.error('Invalid response from ByBit API: ' + JSON.stringify(data));
+      // Validate response structure
+      if (!response || !response.result || !response.result.timeSecond) {
+        this.logger.error('Invalid response from ByBit API: ' + JSON.stringify(response));
         throw new Error('Invalid response from ByBit API');
       }
       
-      this.logger.info(`ByBit server time: ${new Date(data.result.timeSecond * 1000).toISOString()}`);
+      // Log server time
+      const serverTime = new Date(parseInt(response.result.timeSecond) * 1000).toISOString();
+      this.logger.info(`ByBit server time: ${serverTime}`);
       
-      // Check account info
+      // Check account information
       this.logger.info('Getting account information...');
       try {
         const accountInfo = await this.getAccountInfo();
         this.logger.info(`Connected to ByBit account with ${accountInfo.totalEquity} USDT equity`);
+        this.logger.info(`Available balance: ${accountInfo.availableBalance} USDT`);
+        this.logger.info(`Wallet balance: ${accountInfo.totalWalletBalance} USDT`);
       } catch (accountError) {
         this.logger.error(`Failed to get account info: ${accountError.message}`);
         
-        // If we can connect to the API but can't get account info, likely an auth issue
+        // Handle specific authentication errors
         if (accountError.message.includes('Invalid API key') || 
             accountError.message.includes('Invalid signature') ||
             accountError.message.includes('Unauthorized')) {
@@ -64,15 +73,16 @@ class ByBitAPI {
         throw accountError;
       }
       
+      this.logger.info('ByBit API initialization completed successfully');
       return true;
     } catch (error) {
       this.logger.error(`ByBit API initialization failed: ${error.message}`);
       
+      // Detailed error handling
       if (error.response) {
         this.logger.error(`Response status: ${error.response.status}`);
         this.logger.error(`Response data: ${JSON.stringify(error.response.data)}`);
         
-        // Provide more helpful error messages based on status code
         if (error.response.status === 403) {
           throw new Error('API access forbidden. Your IP may be restricted or keys have insufficient permissions');
         } else if (error.response.status === 401) {
@@ -92,25 +102,28 @@ class ByBitAPI {
    * Generate signature for authenticated requests
    */
   generateSignature(timestamp, params = {}, method = 'GET') {
-    // Add recv_window parameter if not present
-    const recvWindow = params.recv_window || '5000';
-    
-    let signString = timestamp + this.apiKey + recvWindow;
+    const recvWindow = '5000'; // Fixed value, no need to take from params
+    let signString = `${timestamp}${this.apiKey}${recvWindow}`;
     
     if (method === 'GET') {
-      // For GET requests, append query parameters alphabetically
-      if (Object.keys(params).length > 0) {
-        const queryString = Object.keys(params)
+      // Remove recv_window from params to avoid duplication
+      const filteredParams = { ...params };
+      delete filteredParams.recv_window;
+      
+      if (Object.keys(filteredParams).length > 0) {
+        const queryString = Object.keys(filteredParams)
           .sort()
-          .map(key => `${key}=${params[key]}`)
+          .map(key => `${key}=${filteredParams[key]}`)
           .join('&');
         signString += queryString;
       }
     } else if (method === 'POST') {
-      // For POST requests, append JSON body
-      signString += JSON.stringify(params);
+      const filteredParams = { ...params };
+      delete filteredParams.recv_window;
+      signString += JSON.stringify(filteredParams);
     }
     
+    this.logger.debug(`Signature string: ${signString}`); // For debugging
     return crypto.createHmac('sha256', this.apiSecret).update(signString).digest('hex');
   }
   
@@ -119,11 +132,11 @@ class ByBitAPI {
    */
   async publicRequest(endpoint, params = {}) {
     try {
-      const response = await this.axios.get(endpoint, { params });
-      this.validateResponse(response.data);
+      const response = await axios.get(`${this.baseUrl}${endpoint}`, { params });
+      this.logger.info(`Response data: ${JSON.stringify(response.data)}`);
       return response.data;
     } catch (error) {
-      this.handleApiError(error, 'Public request failed', endpoint, params);
+      this.logger.error(`Raw error: ${error.message}`);
       throw error;
     }
   }
@@ -172,14 +185,8 @@ class ByBitAPI {
    */
   async privateRequest(endpoint, method = 'GET', params = {}) {
     try {
-      const timestamp = Date.now().toString();
-      const recv_window = '5000';
-      
-      // Add recv_window to params
-      const requestParams = {
-        ...params,
-        recv_window
-      };
+      const timestamp = Date.now(); // Ensure 13-digit timestamp
+      const requestParams = { ...params }; // Don’t add recv_window here
       
       const signature = this.generateSignature(timestamp, requestParams, method);
       
@@ -187,7 +194,7 @@ class ByBitAPI {
         'X-BAPI-API-KEY': this.apiKey,
         'X-BAPI-TIMESTAMP': timestamp,
         'X-BAPI-SIGN': signature,
-        'X-BAPI-RECV-WINDOW': recv_window
+        'X-BAPI-RECV-WINDOW': '5000'
       };
       
       let response;
@@ -242,7 +249,7 @@ class ByBitAPI {
    * Get account information
    */
   async getAccountInfo() {
-    const { result } = await this.privateRequest('/v5/account/wallet-balance', 'GET', { accountType: 'CONTRACT' });
+    const { result } = await this.privateRequest('/v5/account/wallet-balance', 'GET', { accountType: 'UNIFIED' });
     
     if (!result || !result.list || result.list.length === 0) {
       throw new Error('Failed to fetch account information');
@@ -406,7 +413,8 @@ class ByBitAPI {
    */
   async getPositions(symbol = '') {
     const params = {
-      category: 'linear'
+      category: 'linear',
+      settleCoin: 'USDT'
     };
     
     if (symbol) {
@@ -470,7 +478,7 @@ class ByBitAPI {
    */
   async getWalletBalance(coin = 'USDT') {
     const { result } = await this.privateRequest('/v5/account/wallet-balance', 'GET', {
-      accountType: 'CONTRACT',
+      accountType: 'UNIFIED',
       coin
     });
     

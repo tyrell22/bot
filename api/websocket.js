@@ -40,7 +40,7 @@ class WebSocketManager extends EventEmitter {
    */
   async connectPublicWebSocket(symbols) {
     return new Promise((resolve, reject) => {
-      const wsUrl = `${config.api.wsBaseUrl}/public`;
+      const wsUrl = `${config.api.wsBaseUrl}/public/linear`;
       const ws = new WebSocket(wsUrl);
       
       this.connections['public'] = ws;
@@ -647,50 +647,70 @@ handlePrivateMessage(data) {
    * Process ticker data
    */
   processTickerData(message) {
-    // Verify required properties exist
     if (!message || !message.topic || !message.data) {
       this.logger.warn('Received invalid ticker data');
+      this.logger.debug(`Raw message: ${JSON.stringify(message)}`);
       return;
     }
-
+  
     const topicParts = message.topic.split('.');
     if (topicParts.length < 2) {
       this.logger.warn(`Received invalid ticker topic: ${message.topic}`);
+      this.logger.info(`Raw message: ${JSON.stringify(message)}`);
       return;
     }
-
+  
     const symbol = topicParts[1];
     const data = message.data;
-    
-    // Validate ticker data
-    if (!data || !data.lastPrice || !data.highPrice24h || !data.lowPrice24h || 
-        !data.volume24h || !data.turnover24h || data.price24hPcnt === undefined) {
-      this.logger.warn(`Received invalid ticker data for ${symbol}`);
+  
+    // Log raw data for every message
+    this.logger.info(`Raw ticker data for ${symbol}: ${JSON.stringify(data)}`);
+  
+    // Determine a lastPrice from available fields
+    let lastPrice;
+    if (data.lastPrice) {
+      lastPrice = parseFloat(data.lastPrice);
+    } else if (data.bid1Price && data.ask1Price) {
+      lastPrice = (parseFloat(data.bid1Price) + parseFloat(data.ask1Price)) / 2;
+      this.logger.info(`Calculated lastPrice for ${symbol} from bid/ask: ${lastPrice}`);
+    } else if (data.bid1Price) {
+      lastPrice = parseFloat(data.bid1Price);
+      this.logger.debug(`Using bid1Price as lastPrice for ${symbol}: ${lastPrice}`);
+    } else if (data.ask1Price) {
+      lastPrice = parseFloat(data.ask1Price);
+      this.logger.info(`Using ask1Price as lastPrice for ${symbol}: ${lastPrice}`);
+    } else {
+      this.logger.warn(`Received invalid ticker data for ${symbol} - no usable price field`);
       return;
     }
-    
-    // Initialize storage for tickers if needed
+  
+    // Initialize storage
     if (!this.marketData.tickers) {
       this.marketData.tickers = {};
     }
-    
-    // Process ticker data
+  
+    // Process with fallback values
     this.marketData.tickers[symbol] = {
       symbol,
-      lastPrice: parseFloat(data.lastPrice),
-      highPrice24h: parseFloat(data.highPrice24h),
-      lowPrice24h: parseFloat(data.lowPrice24h),
-      volume24h: parseFloat(data.volume24h),
-      turnover24h: parseFloat(data.turnover24h),
-      price24hPcnt: parseFloat(data.price24hPcnt),
-      timestamp: Date.now()
+      lastPrice,
+      highPrice24h: data.highPrice24h ? parseFloat(data.highPrice24h) : 0,
+      lowPrice24h: data.lowPrice24h ? parseFloat(data.lowPrice24h) : 0,
+      volume24h: data.volume24h ? parseFloat(data.volume24h) : 0, // Fallback to 0 if missing
+      turnover24h: data.turnover24h ? parseFloat(data.turnover24h) : 0,
+      price24hPcnt: data.price24hPcnt != null ? parseFloat(data.price24hPcnt) : 0,
+      timestamp: Date.now(),
+      bidPrice: data.bid1Price ? parseFloat(data.bid1Price) : null,
+      askPrice: data.ask1Price ? parseFloat(data.ask1Price) : null,
+      bidSize: data.bid1Size ? parseFloat(data.bid1Size) : null,
+      askSize: data.ask1Size ? parseFloat(data.ask1Size) : null
     };
-    
-    // Emit the updated ticker event
-    this.emit('ticker', {
-      symbol,
-      data: this.marketData.tickers[symbol]
-    });
+  
+    // Warn if key fields are missing
+    if (!data.highPrice24h || !data.lowPrice24h || !data.price24hPcnt || !data.volume24h) {
+      this.logger.warn(`Partial ticker data for ${symbol} - missing some expected fields`);
+    }
+  
+    this.emit('ticker', { symbol, data: this.marketData.tickers[symbol] });
   }
   
   /**
