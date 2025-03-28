@@ -3,38 +3,74 @@ const crypto = require('crypto');
 const config = require('../config');
 const EventEmitter = require('events');
 const loggerModule = require('../utils/logger');
+const ByBitAPI = require('./bybit'); // Adjust path to your ByBitAPI file
 
 class WebSocketManager extends EventEmitter {
   constructor() {
     super();
-    // Get logger instance
     this.logger = loggerModule.getLogger();
-    
+    this.bybitApi = ByBitAPI; // Use the existing instance
     this.connections = {};
     this.subscriptions = {};
     this.marketData = {};
     this.reconnectAttempts = {};
     this.maxReconnectAttempts = 10;
-    this.reconnectDelay = 5000; // 5 seconds
-    this.pingInterval = 20000; // 20 seconds
+    this.reconnectDelay = 5000;
+    this.pingInterval = 20000;
     this.pingTimeouts = {};
     this.connected = false;
   }
-  
+
   /**
-   * Initialize WebSocket connections for multiple symbols
+   * Initialize WebSocket connections for multiple symbols with historical data
+   * @param {string[]} symbols - Array of symbols to initialize
    */
   async initConnections(symbols) {
-    // Public channels
-    await this.connectPublicWebSocket(symbols);
-    
-    // Private channels
-    await this.connectPrivateWebSocket();
-    
-    this.connected = true;
-    return true;
+    try {
+      this.logger.info('Fetching historical klines for initialization...');
+      for (const symbol of symbols) {
+        for (const timeframe of config.timeframes) {
+          await this.fetchHistoricalKlines(symbol, timeframe, 50);
+        }
+      }
+
+      await this.connectPublicWebSocket(symbols);
+      await this.connectPrivateWebSocket();
+
+      this.connected = true;
+      this.logger.info('WebSocketManager initialized successfully with historical data');
+      return true;
+    } catch (error) {
+      this.logger.error(`Failed to initialize WebSocketManager: ${error.message}`);
+      throw error;
+    }
   }
-  
+
+  /**
+   * Fetch historical klines using ByBitAPI
+   * @param {string} symbol - Trading pair (e.g., BTCUSDT)
+   * @param {string} timeframe - Kline interval (e.g., '1' for 1 minute)
+   * @param {number} limit - Number of klines to fetch (default: 50)
+   */
+  async fetchHistoricalKlines(symbol, timeframe, limit = 50) {
+    try {
+      const klines = await this.bybitApi.getKlines(symbol, timeframe, limit);
+      if (!klines || klines.length === 0) {
+        throw new Error('No historical klines returned');
+      }
+
+      if (!this.marketData.klines) this.marketData.klines = {};
+      if (!this.marketData.klines[symbol]) this.marketData.klines[symbol] = {};
+
+      this.marketData.klines[symbol][timeframe] = klines.sort((a, b) => a.timestamp - b.timestamp);
+
+      this.logger.info(`Fetched ${klines.length} historical klines for ${symbol} on ${timeframe}`);
+      this.emit('kline', { symbol, timeframe, data: this.marketData.klines[symbol][timeframe] });
+    } catch (error) {
+      this.logger.error(`Failed to fetch historical klines for ${symbol} (${timeframe}): ${error.message}`);
+    }
+  }
+
   /**
    * Connect to public WebSocket
    */
@@ -42,49 +78,32 @@ class WebSocketManager extends EventEmitter {
     return new Promise((resolve, reject) => {
       const wsUrl = `${config.api.wsBaseUrl}/public/linear`;
       const ws = new WebSocket(wsUrl);
-      
+
       this.connections['public'] = ws;
       this.reconnectAttempts['public'] = 0;
-      
+
       ws.on('open', () => {
         this.logger.info('Public WebSocket connected');
-        
-        // Setup ping interval
         this.setupPingInterval('public');
-        
-        // Subscribe to klines (candlesticks)
         this.subscribeToKlines(symbols);
-        
-        // Subscribe to orderbooks
         this.subscribeToOrderbooks(symbols);
-        
-        // Subscribe to tickers
         this.subscribeToTickers(symbols);
-        
         resolve(true);
       });
-      
-      ws.on('message', (data) => {
-        this.handlePublicMessage(data);
-      });
-      
+
+      ws.on('message', (data) => this.handlePublicMessage(data));
       ws.on('error', (error) => {
         this.logger.error(`Public WebSocket error: ${error.message}`);
-        if (!this.connected) {
-          reject(error);
-        }
+        if (!this.connected) reject(error);
       });
-      
       ws.on('close', () => {
         this.logger.warn('Public WebSocket closed');
         clearInterval(this.pingTimeouts['public']);
-        
-        // Attempt to reconnect
         this.reconnectPublicWebSocket(symbols);
       });
     });
   }
-  
+
   /**
    * Connect to private WebSocket
    */
@@ -93,87 +112,65 @@ class WebSocketManager extends EventEmitter {
       this.logger.warn('API credentials not provided, skipping private WebSocket connection');
       return false;
     }
-    
+
     return new Promise((resolve, reject) => {
-      // Connect to the private WebSocket endpoint without authentication params
       const wsUrl = `${config.api.wsBaseUrl}/private`;
       const ws = new WebSocket(wsUrl);
-      
+
       this.connections['private'] = ws;
       this.reconnectAttempts['private'] = 0;
-      
+
       ws.on('open', () => {
         this.logger.info('Private WebSocket connected, authenticating...');
-        
-        // Generate authentication parameters
+
         const expires = Date.now() + 10000;
         const signature = crypto
           .createHmac('sha256', config.api.apiSecret)
           .update(`GET/realtime${expires}`)
           .digest('hex');
-        
-        // Send authentication message
+
         const authMessage = JSON.stringify({
-          op: "auth",
-          args: [
-            config.api.apiKey,
-            expires,
-            signature
-          ]
+          op: 'auth',
+          args: [config.api.apiKey, expires, signature],
         });
-        
+
         ws.send(authMessage);
-        
-        // We'll wait for the auth response in the message handler
-        // Don't resolve the promise yet
       });
-      
+
       ws.on('message', (data) => {
         try {
           const message = JSON.parse(data);
-          
-          // Check for auth response
           if (message.op === 'auth') {
             if (message.success) {
               this.logger.info(`Private WebSocket authenticated successfully: ${message.conn_id}`);
-              
-              // Setup ping interval
               this.setupPingInterval('private');
-              
-              // Subscribe to execution events
               this.subscribeToPrivateTopics(['execution', 'position', 'order']);
-              
               resolve(true);
             } else {
               this.logger.error(`Private WebSocket authentication failed: ${message.ret_msg}`);
               reject(new Error(`Authentication failed: ${message.ret_msg}`));
             }
           } else {
-            // Handle other message types
             this.handlePrivateMessage(data);
           }
         } catch (error) {
           this.logger.error(`Error processing WebSocket message: ${error.message}`);
         }
       });
-      
+
       ws.on('error', (error) => {
         this.logger.error(`Private WebSocket error: ${error.message}`);
-        if (!this.connected) {
-          reject(error);
-        }
+        if (!this.connected) reject(error);
       });
-      
+
       ws.on('close', () => {
         this.logger.warn('Private WebSocket closed');
         clearInterval(this.pingTimeouts['private']);
-        
-        // Attempt to reconnect
         this.reconnectPrivateWebSocket();
       });
     });
   }
-  
+
   /**
    * Set up ping interval to keep WebSocket alive
    */
@@ -181,7 +178,7 @@ class WebSocketManager extends EventEmitter {
     if (this.pingTimeouts[connectionName]) {
       clearInterval(this.pingTimeouts[connectionName]);
     }
-    
+
     this.pingTimeouts[connectionName] = setInterval(() => {
       const ws = this.connections[connectionName];
       if (ws && ws.readyState === WebSocket.OPEN) {
@@ -191,7 +188,7 @@ class WebSocketManager extends EventEmitter {
       }
     }, this.pingInterval);
   }
-  
+
   /**
    * Reconnect to public WebSocket
    */
@@ -201,19 +198,19 @@ class WebSocketManager extends EventEmitter {
       this.logger.error('Maximum reconnect attempts reached for public WebSocket');
       return;
     }
-    
+
     this.reconnectAttempts[connectionName]++;
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts[connectionName]);
-    
+
     this.logger.info(`Attempting to reconnect public WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
-    
+
     setTimeout(() => {
-      this.connectPublicWebSocket(symbols).catch(error => {
+      this.connectPublicWebSocket(symbols).catch((error) => {
         this.logger.error(`Failed to reconnect public WebSocket: ${error.message}`);
       });
     }, delay);
   }
-  
+
   /**
    * Reconnect to private WebSocket
    */
@@ -223,90 +220,159 @@ class WebSocketManager extends EventEmitter {
       this.logger.error('Maximum reconnect attempts reached for private WebSocket');
       return;
     }
-    
+
     this.reconnectAttempts[connectionName]++;
     const delay = this.reconnectDelay * Math.pow(1.5, this.reconnectAttempts[connectionName]);
-    
+
     this.logger.info(`Attempting to reconnect private WebSocket in ${delay}ms (attempt ${this.reconnectAttempts[connectionName]})`);
-    
+
     setTimeout(() => {
-      this.connectPrivateWebSocket().catch(error => {
+      this.connectPrivateWebSocket().catch((error) => {
         this.logger.error(`Failed to reconnect private WebSocket: ${error.message}`);
       });
     }, delay);
   }
-  
+
+  /**
+   * Process real-time kline updates from WebSocket
+   */
+  processKlineData(message) {
+    try {
+      if (!message || !message.topic || !message.data) {
+        this.logger.warn('Received invalid kline data - missing required fields');
+        return;
+      }
+
+      const topicParts = message.topic.split('.');
+      const timeframe = topicParts[1];
+      const symbol = topicParts[2];
+      const data = message.data;
+
+      if (!this.marketData.klines[symbol] || !this.marketData.klines[symbol][timeframe]) {
+        this.logger.warn(`No historical data found for ${symbol} (${timeframe}), initializing empty array`);
+        if (!this.marketData.klines) this.marketData.klines = {};
+        if (!this.marketData.klines[symbol]) this.marketData.klines[symbol] = {};
+        this.marketData.klines[symbol][timeframe] = [];
+      }
+
+      const klines = this.marketData.klines[symbol][timeframe];
+      let newKlineCount = 0;
+
+      this.logger.info(`${symbol} ${timeframe} - Pre-processing kline count: ${klines.length}`);
+
+      if (Array.isArray(data)) {
+        data.forEach((kline) => {
+          const formattedKline = this.formatKline(kline);
+          const existingIndex = klines.findIndex((k) => k.timestamp === formattedKline.timestamp);
+          if (existingIndex === -1) {
+            klines.push(formattedKline);
+            newKlineCount++;
+            this.logger.debug(`Added new kline for ${symbol} (${timeframe}) at ${formattedKline.timestamp}`);
+          } else {
+            klines[existingIndex] = formattedKline;
+            this.logger.debug(`Updated kline for ${symbol} (${timeframe}) at ${formattedKline.timestamp}`);
+          }
+        });
+      } else if (typeof data === 'object') {
+        const formattedKline = this.formatKline(data);
+        const existingIndex = klines.findIndex((k) => k.timestamp === formattedKline.timestamp);
+        if (existingIndex === -1) {
+          klines.push(formattedKline);
+          newKlineCount++;
+          this.logger.debug(`Added new kline for ${symbol} (${timeframe}) at ${formattedKline.timestamp}`);
+        } else {
+          klines[existingIndex] = formattedKline;
+          this.logger.debug(`Updated kline for ${symbol} (${timeframe}) at ${formattedKline.timestamp}`);
+        }
+      }
+
+      klines.sort((a, b) => a.timestamp - b.timestamp);
+
+      if (klines.length > 100) {
+        klines.splice(0, klines.length - 100);
+      }
+
+      this.logger.info(`${symbol} ${timeframe} - Added ${newKlineCount} new klines, total now: ${klines.length}`);
+      this.emit('kline', { symbol, timeframe, data: klines });
+    } catch (error) {
+      this.logger.error(`Error processing kline data: ${error.message}`);
+      this.logger.error(`Error stack: ${error.stack}`);
+    }
+  }
+
+  /**
+   * Format kline data consistently
+   */
+  formatKline(kline) {
+    if (typeof kline.start !== 'undefined') {
+      return {
+        timestamp: kline.start,
+        open: parseFloat(kline.open),
+        high: parseFloat(kline.high),
+        low: parseFloat(kline.low),
+        close: parseFloat(kline.close),
+        volume: parseFloat(kline.volume),
+        turnover: parseFloat(kline.turnover || 0),
+      };
+    }
+    return {
+      timestamp: kline.t || kline.timestamp || Date.now(),
+      open: parseFloat(kline.o || kline.open || 0),
+      high: parseFloat(kline.h || kline.high || 0),
+      low: parseFloat(kline.l || kline.low || 0),
+      close: parseFloat(kline.c || kline.close || 0),
+      volume: parseFloat(kline.v || kline.volume || 0),
+      turnover: parseFloat(kline.V || kline.turnover || 0),
+    };
+  }
+
   /**
    * Subscribe to klines (candlesticks)
    */
-  
   subscribeToKlines(symbols) {
     const args = [];
-    
-    
     for (const symbol of symbols) {
       for (const timeframe of config.timeframes) {
-        args.push(`kline.${timeframe}.${symbol}`);  
+        args.push(`kline.${timeframe}.${symbol}`);
       }
     }
-    
-    logger.info(`Subscribing to klines with args: ${JSON.stringify(args)}`);
-    
-    const subscribeMsg = {
-      op: 'subscribe',
-      args
-    };
-    
+
+    this.logger.info(`Subscribing to klines with args: ${JSON.stringify(args)}`);
+    const subscribeMsg = { op: 'subscribe', args };
     this.send('public', subscribeMsg);
-    logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
+    this.logger.info(`Subscribed to klines for ${symbols.length} symbols on ${config.timeframes.length} timeframes`);
   }
+
   /**
    * Subscribe to orderbooks
    */
   subscribeToOrderbooks(symbols) {
-    // Add more detailed format for the orderbook subscription
-    const args = symbols.map(symbol => `orderbook.${config.orderbook.depth}.${symbol}`);
-    
-    // Add logging before sending
-    logger.info(`Subscribing to orderbooks with args: ${JSON.stringify(args)}`);
-    
-    const subscribeMsg = {
-      op: 'subscribe',
-      args
-    };
-    
+    const args = symbols.map((symbol) => `orderbook.${config.orderbook.depth}.${symbol}`);
+    this.logger.info(`Subscribing to orderbooks with args: ${JSON.stringify(args)}`);
+    const subscribeMsg = { op: 'subscribe', args };
     this.send('public', subscribeMsg);
-    logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
+    this.logger.info(`Subscribed to orderbook data for ${symbols.length} symbols`);
   }
-  
+
   /**
    * Subscribe to tickers
    */
   subscribeToTickers(symbols) {
-    const args = symbols.map(symbol => `tickers.${symbol}`);
-    
-    const subscribeMsg = {
-      op: 'subscribe',
-      args
-    };
-    
+    const args = symbols.map((symbol) => `tickers.${symbol}`);
+    const subscribeMsg = { op: 'subscribe', args };
     this.send('public', subscribeMsg);
     this.logger.info(`Subscribed to ticker data for ${symbols.length} symbols`);
   }
-  
+
   /**
    * Subscribe to private topics
    */
   subscribeToPrivateTopics(topics) {
-    const subscribeMsg = {
-      op: 'subscribe',
-      args: topics
-    };
-    
+    const subscribeMsg = { op: 'subscribe', args: topics };
     this.send('private', subscribeMsg);
     this.logger.info(`Subscribed to private topics: ${topics.join(', ')}`);
   }
-  
+
   /**
    * Send message to WebSocket
    */
@@ -316,7 +382,6 @@ class WebSocketManager extends EventEmitter {
       this.logger.error(`Cannot send message: ${connectionName} WebSocket is not open`);
       return false;
     }
-    
     try {
       const message = typeof data === 'string' ? data : JSON.stringify(data);
       ws.send(message);
@@ -326,207 +391,101 @@ class WebSocketManager extends EventEmitter {
       return false;
     }
   }
-  
-// Modified handlePublicMessage function
-handlePublicMessage(data) {
-  try {
-    const message = JSON.parse(data);
-    
-    
-    
-    // Handle ping/pong
-    if (message.op === 'pong') {
-      this.logger.debug('Received pong from public WebSocket');
-      return;
-    }
-    
-    // Handle subscription response
-    if (message.op === 'subscribe') {
-      this.logger.debug(`Subscription to ${message.args} successful`);
-      return;
-    }
-    
-    // Handle data message
-    if (message.topic && message.data) {
-      // Extract topic parts and log
-      const topicParts = message.topic.split('.');
-      const dataType = topicParts[0];
-     
-      
-      // Process different data types
-      switch (dataType) {
-        case 'kline':
-          
-          this.processKlineData(message);
-          break;
-        case 'orderbook':
-          this.processOrderbookData(message);
-          break;
-        case 'tickers':
-          this.processTickerData(message);
-          break;
-        default:
-          this.logger.debug(`Received unknown topic: ${message.topic}`);
-      }
-    } else {
-      logger.info(`Received message without topic or data: ${JSON.stringify(message)}`);
-    }
-  } catch (error) {
-    this.logger.error(`Error processing public WebSocket message: ${error.message}`);
-    // Also log the raw message
-    logger.error(`Raw message that caused error: ${data}`);
-  }
-}
-  
+
   /**
- * Handle private WebSocket messages
- */
-handlePrivateMessage(data) {
-  try {
-    const message = JSON.parse(data);
-    
-    // Handle ping/pong
-    if (message.op === 'pong') {
-      this.logger.debug('Received pong from private WebSocket');
-      return;
-    }
-    
-    // Handle authentication response
-    if (message.op === 'auth') {
-      if (message.success) {
-        this.logger.info(`WebSocket authentication successful: ${message.conn_id}`);
-      } else {
-        this.logger.error(`WebSocket authentication failed: ${message.ret_msg}`);
-        // Trigger reconnection with proper authentication
-        if (this.connections['private']) {
-          this.connections['private'].close();
-        }
-      }
-      return;
-    }
-    
-    // Handle subscription response
-    if (message.op === 'subscribe') {
-      this.logger.debug(`Subscription to ${message.args} successful`);
-      return;
-    }
-    
-    // Handle data message
-    if (message.topic && message.data) {
-      // Extract topic
-      const topic = message.topic;
-      
-      // Process different private topics
-      switch (topic) {
-        case 'execution':
-          this.processExecutionData(message.data);
-          break;
-        case 'position':
-          this.processPositionData(message.data);
-          break;
-        case 'order':
-          this.processOrderData(message.data);
-          break;
-        default:
-          this.logger.debug(`Received unknown private topic: ${topic}`);
-      }
-    }
-  } catch (error) {
-    this.logger.error(`Error processing private WebSocket message: ${error.message}`);
-    // Log the raw message for debugging
-    this.logger.debug(`Raw message data: ${data}`);
-  }
-}
-  
-  /**
-   * Process kline data
+   * Handle public WebSocket messages
    */
-  processKlineData(message) {
+  handlePublicMessage(data) {
     try {
-      // Verify required properties exist
-      if (!message || !message.topic || !message.data) {
-        this.logger.warn('Received invalid kline data');
+      const message = JSON.parse(data);
+
+      if (message.op === 'pong') {
+        this.logger.debug('Received pong from public WebSocket');
         return;
       }
-  
-      const topicParts = message.topic.split('.');
-      if (topicParts.length < 3) {
-        this.logger.warn(`Received invalid kline topic: ${message.topic}`);
+
+      if (message.op === 'subscribe') {
+        this.logger.debug(`Subscription to ${message.args} successful`);
         return;
       }
-  
-      const timeframe = topicParts[1];
-      const symbol = topicParts[2];
-      const data = message.data;
-      
-      // Initialize storage for this symbol and timeframe if needed
-      if (!this.marketData.klines) {
-        this.marketData.klines = {};
-      }
-      
-      if (!this.marketData.klines[symbol]) {
-        this.marketData.klines[symbol] = {};
-      }
-      
-      if (!this.marketData.klines[symbol][timeframe]) {
-        this.marketData.klines[symbol][timeframe] = [];
-      }
-      
-      // For ByBit V5 API, the format might be different
-      // Check both formats (array and object)
-      if (Array.isArray(data)) {
-        // Format the candles
-        const formattedKlines = data.map(kline => ({
-          timestamp: typeof kline.start !== 'undefined' ? kline.start : kline[0],
-          open: parseFloat(typeof kline.open !== 'undefined' ? kline.open : kline[1]),
-          high: parseFloat(typeof kline.high !== 'undefined' ? kline.high : kline[2]),
-          low: parseFloat(typeof kline.low !== 'undefined' ? kline.low : kline[3]),
-          close: parseFloat(typeof kline.close !== 'undefined' ? kline.close : kline[4]),
-          volume: parseFloat(typeof kline.volume !== 'undefined' ? kline.volume : kline[5]),
-          turnover: parseFloat(typeof kline.turnover !== 'undefined' ? kline.turnover : kline[6] || 0)
-        }));
-        
-        this.marketData.klines[symbol][timeframe] = formattedKlines;
-      } 
-      // Handle single candle update
-      else if (typeof data === 'object') {
-        const kline = {
-          timestamp: typeof data.start !== 'undefined' ? data.start : data.t || Date.now(),
-          open: parseFloat(typeof data.open !== 'undefined' ? data.open : data.o || 0),
-          high: parseFloat(typeof data.high !== 'undefined' ? data.high : data.h || 0),
-          low: parseFloat(typeof data.low !== 'undefined' ? data.low : data.l || 0),
-          close: parseFloat(typeof data.close !== 'undefined' ? data.close : data.c || 0),
-          volume: parseFloat(typeof data.volume !== 'undefined' ? data.volume : data.v || 0),
-          turnover: parseFloat(typeof data.turnover !== 'undefined' ? data.turnover : data.V || 0)
-        };
-        
-        // Find and update existing candle or add new one
-        const existingIndex = this.marketData.klines[symbol][timeframe].findIndex(
-          k => k.timestamp === kline.timestamp
-        );
-        
-        if (existingIndex !== -1) {
-          this.marketData.klines[symbol][timeframe][existingIndex] = kline;
-        } else {
-          this.marketData.klines[symbol][timeframe].push(kline);
-          // Keep array sorted by timestamp
-          this.marketData.klines[symbol][timeframe].sort((a, b) => a.timestamp - b.timestamp);
+
+      if (message.topic && message.data) {
+        const topicParts = message.topic.split('.');
+        const dataType = topicParts[0];
+
+        switch (dataType) {
+          case 'kline':
+            this.processKlineData(message);
+            break;
+          case 'orderbook':
+            this.processOrderbookData(message);
+            break;
+          case 'tickers':
+            this.processTickerData(message);
+            break;
+          default:
+            this.logger.debug(`Received unknown topic: ${message.topic}`);
         }
-        
-        this.logger.info(`Updated single kline for ${symbol} on ${timeframe}`);
+      } else {
+        this.logger.info(`Received message without topic or data: ${JSON.stringify(message)}`);
       }
-      
-      // Emit the updated kline event
-      this.emit('kline', {
-        symbol,
-        timeframe,
-        data: this.marketData.klines[symbol][timeframe]
-      });
     } catch (error) {
-      this.logger.error(`Error processing kline data: ${error.message}`);
-      this.logger.error(`Error data: ${JSON.stringify(message)}`);
+      this.logger.error(`Error processing public WebSocket message: ${error.message}`);
+      this.logger.error(`Raw message that caused error: ${data}`);
     }
   }
+
+  /**
+   * Handle private WebSocket messages
+   */
+  handlePrivateMessage(data) {
+    try {
+      const message = JSON.parse(data);
+
+      if (message.op === 'pong') {
+        this.logger.debug('Received pong from private WebSocket');
+        return;
+      }
+
+      if (message.op === 'auth') {
+        if (message.success) {
+          this.logger.info(`WebSocket authentication successful: ${message.conn_id}`);
+        } else {
+          this.logger.error(`WebSocket authentication failed: ${message.ret_msg}`);
+          if (this.connections['private']) {
+            this.connections['private'].close();
+          }
+        }
+        return;
+      }
+
+      if (message.op === 'subscribe') {
+        this.logger.debug(`Subscription to ${message.args} successful`);
+        return;
+      }
+
+      if (message.topic && message.data) {
+        switch (message.topic) {
+          case 'execution':
+            this.processExecutionData(message.data);
+            break;
+          case 'position':
+            this.processPositionData(message.data);
+            break;
+          case 'order':
+            this.processOrderData(message.data);
+            break;
+          default:
+            this.logger.debug(`Received unknown private topic: ${message.topic}`);
+        }
+      }
+    } catch (error) {
+      this.logger.error(`Error processing private WebSocket message: ${error.message}`);
+      this.logger.debug(`Raw message data: ${data}`);
+    }
+  }
+
+
   
   processOrderbookData(message) {
     try {
