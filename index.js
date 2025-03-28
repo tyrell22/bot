@@ -140,7 +140,7 @@ async function shutdown() {
   
   // Close WebSocket connections
   try {
-    await WebSocketManager.closeAll();
+    await wsManager.closeAll()
     logger.info('WebSocket connections closed');
   } catch (error) {
     logger.error(`Error closing WebSocket connections: ${error.message}`);
