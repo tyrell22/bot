@@ -1,214 +1,249 @@
 /**
- * Volume Weighted Average Price (VWAP) indicator
- * VWAP is calculated by adding up the dollars traded for every transaction
- * and dividing by the total shares traded.
+ * Relative Strength Index (RSI) indicator
+ * RSI measures the magnitude of recent price changes to evaluate
+ * overbought or oversold conditions in the price of an asset.
  */
-class VWAP {
-    constructor() {
-      this.vwapData = {};
-      this.sessionStartTimestamps = {};
-      this.config = require('../config').indicators.vwap;
-    }
-    
-    /**
-     * Calculate VWAP for a symbol based on candles
-     * @param {string} symbol - The trading pair symbol
-     * @param {Array} candles - Array of candle data
-     * @param {boolean} resetDaily - Whether to reset VWAP calculation daily
-     * @returns {Object} - VWAP calculation result
-     */
-    calculate(symbol, candles, resetDaily = true) {
-      if (!candles || candles.length === 0) {
-        return {
-          valid: false,
-          message: 'No candle data provided'
-        };
-      }
-      
-      // Sort candles by timestamp (ascending)
-      candles = [...candles].sort((a, b) => a.timestamp - b.timestamp);
-      
-      // Initialize or get session start timestamp
-      if (!this.sessionStartTimestamps[symbol] || resetDaily) {
-        // Get current date
-        const now = new Date();
-        // Set to midnight UTC
-        const midnightUtc = new Date(Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate(),
-          0, 0, 0, 0
-        ));
-        
-        this.sessionStartTimestamps[symbol] = midnightUtc.getTime();
-      }
-      
-      // Filter candles for current session
-      const sessionCandles = candles.filter(
-        candle => candle.timestamp >= this.sessionStartTimestamps[symbol]
-      );
-      
-      if (sessionCandles.length === 0) {
-        return {
-          valid: false,
-          message: 'No candles found in current session'
-        };
-      }
-      
-      // Calculate VWAP
-      let cumulativeTPV = 0; // Typical Price * Volume
-      let cumulativeVolume = 0;
-      
-      const vwapPoints = [];
-      
-      for (const candle of sessionCandles) {
-        // Calculate typical price: (high + low + close) / 3
-        const typicalPrice = (candle.high + candle.low + candle.close) / 3;
-        
-        // Calculate price * volume
-        const priceVolume = typicalPrice * candle.volume;
-        
-        // Add to cumulative values
-        cumulativeTPV += priceVolume;
-        cumulativeVolume += candle.volume;
-        
-        // Calculate VWAP
-        const vwap = cumulativeTPV / cumulativeVolume;
-        
-        vwapPoints.push({
-          timestamp: candle.timestamp,
-          vwap
-        });
-      }
-      
-      // Calculate standard deviation bands
-      let sumSquaredDev = 0;
-      for (const candle of sessionCandles) {
-        const typicalPrice = (candle.high + candle.low + candle.close) / 3;
-        const latestVwap = vwapPoints[vwapPoints.length - 1].vwap;
-        const dev = typicalPrice - latestVwap;
-        sumSquaredDev += dev * dev * candle.volume;
-      }
-      
-      const variance = sumSquaredDev / cumulativeVolume;
-      const standardDev = Math.sqrt(variance);
-      
-      // Store VWAP data for this symbol
-      this.vwapData[symbol] = {
-        vwap: vwapPoints[vwapPoints.length - 1].vwap,
-        upperBand1: vwapPoints[vwapPoints.length - 1].vwap + standardDev,
-        upperBand2: vwapPoints[vwapPoints.length - 1].vwap + 2 * standardDev,
-        lowerBand1: vwapPoints[vwapPoints.length - 1].vwap - standardDev,
-        lowerBand2: vwapPoints[vwapPoints.length - 1].vwap - 2 * standardDev,
-        standardDev,
-        points: vwapPoints
-      };
-      
-      return {
-        valid: true,
-        ...this.vwapData[symbol]
-      };
-    }
-    
-    /**
-     * Get VWAP data for a specific symbol
-     * @param {string} symbol - The trading pair symbol
-     * @returns {Object|null} - VWAP data or null if not available
-     */
-    getVwap(symbol) {
-      return this.vwapData[symbol] || null;
-    }
-    
-    /**
-     * Check if price is above or below VWAP
-     * @param {string} symbol - The trading pair symbol
-     * @param {number} price - Current price to compare
-     * @returns {Object} - Comparison results
-     */
-    checkPriceVsVwap(symbol, price) {
-      if (!this.vwapData[symbol]) {
-        return {
-          valid: false,
-          message: 'No VWAP data available for this symbol'
-        };
-      }
-      
-      const vwap = this.vwapData[symbol].vwap;
-      const upperBand1 = this.vwapData[symbol].upperBand1;
-      const upperBand2 = this.vwapData[symbol].upperBand2;
-      const lowerBand1 = this.vwapData[symbol].lowerBand1;
-      const lowerBand2 = this.vwapData[symbol].lowerBand2;
-      
-      return {
-        valid: true,
-        price,
-        vwap,
-        deviation: price - vwap,
-        percentDeviation: ((price - vwap) / vwap) * 100,
-        aboveVwap: price > vwap,
-        belowVwap: price < vwap,
-        aboveUpperBand1: price > upperBand1,
-        aboveUpperBand2: price > upperBand2,
-        belowLowerBand1: price < lowerBand1,
-        belowLowerBand2: price < lowerBand2,
-        bands: {
-          upperBand1,
-          upperBand2,
-          lowerBand1,
-          lowerBand2
-        }
-      };
-    }
-    
-    /**
-     * Get a trading signal based on VWAP position
-     * @param {string} symbol - The trading pair symbol
-     * @param {number} price - Current price to evaluate
-     * @returns {Object} - The trading signal
-     */
-    getSignal(symbol, price) {
-      const comparison = this.checkPriceVsVwap(symbol, price);
-      
-      if (!comparison.valid) {
-        return {
-          valid: false,
-          message: comparison.message
-        };
-      }
-      
-      let signal = 'NEUTRAL';
-      let strength = 0;
-      
-      // Price crossing above VWAP from below - bullish
-      if (comparison.aboveVwap && comparison.percentDeviation < 0.5) {
-        signal = 'BUY';
-        strength = 1;
-      }
-      // Price crossing below VWAP from above - bearish
-      else if (comparison.belowVwap && comparison.percentDeviation > -0.5) {
-        signal = 'SELL';
-        strength = 1;
-      }
-      // Price strongly above VWAP and above upper band - very bullish
-      else if (comparison.aboveUpperBand1) {
-        strength = comparison.aboveUpperBand2 ? 3 : 2;
-        // Too extended above upper band may indicate overextension
-        signal = comparison.aboveUpperBand2 ? 'NEUTRAL' : 'BUY';
-      }
-      // Price strongly below VWAP and below lower band - very bearish
-      else if (comparison.belowLowerBand1) {
-        strength = comparison.belowLowerBand2 ? 3 : 2;
-        // Too extended below lower band may indicate overextension
-        signal = comparison.belowLowerBand2 ? 'NEUTRAL' : 'SELL';
-      }
-      
-      return {
-        valid: true,
-        signal,
-        strength,
-        comparison
-      };
-    }
+const { RSI } = require('technicalindicators');
+const config = require('../config').indicators.rsi;
+
+class RSIIndicator {
+  constructor() {
+    this.rsiData = {};
+    this.period = config.period;
+    this.overbought = config.overbought;
+    this.oversold = config.oversold;
   }
   
-  module.exports = new VWAP();
+  /**
+   * Calculate RSI for a symbol based on candles
+   * @param {string} symbol - The trading pair symbol
+   * @param {Array} candles - Array of candle data
+   * @param {number} period - RSI period (default: 14)
+   * @returns {Object} - RSI calculation result
+   */
+  calculate(symbol, candles, period = this.period) {
+    if (!candles || candles.length === 0) {
+      return {
+        valid: false,
+        message: 'No candle data provided'
+      };
+    }
+    
+    // Sort candles by timestamp (ascending)
+    candles = [...candles].sort((a, b) => a.timestamp - b.timestamp);
+    
+    // Extract close prices
+    const closePrices = candles.map(candle => candle.close);
+    
+    // Calculate RSI
+    const rsiValues = RSI.calculate({
+      values: closePrices,
+      period
+    });
+    
+    // Merge with timestamps
+    const rsiPoints = [];
+    
+    // The RSI calculation returns an array with undefined values for the first 'period' entries,
+    // so we need to align the timestamps correctly
+    for (let i = period; i < candles.length; i++) {
+      rsiPoints.push({
+        timestamp: candles[i].timestamp,
+        value: rsiValues[i - period]
+      });
+    }
+    
+    // Store RSI data for this symbol
+    this.rsiData[symbol] = {
+      current: rsiPoints[rsiPoints.length - 1].value,
+      points: rsiPoints,
+      period
+    };
+    
+    return {
+      valid: true,
+      ...this.rsiData[symbol]
+    };
+  }
+  
+  /**
+   * Get RSI data for a specific symbol
+   * @param {string} symbol - The trading pair symbol
+   * @returns {Object|null} - RSI data or null if not available
+   */
+  getRsi(symbol) {
+    return this.rsiData[symbol] || null;
+  }
+  
+  /**
+   * Check if RSI indicates overbought or oversold conditions
+   * @param {string} symbol - The trading pair symbol
+   * @param {number} overbought - Overbought threshold (default: 70)
+   * @param {number} oversold - Oversold threshold (default: 30)
+   * @returns {Object} - Condition check result
+   */
+  checkConditions(symbol, overbought = this.overbought, oversold = this.oversold) {
+    if (!this.rsiData[symbol]) {
+      return {
+        valid: false,
+        message: 'No RSI data available for this symbol'
+      };
+    }
+    
+    const rsi = this.rsiData[symbol].current;
+    
+    return {
+      valid: true,
+      rsi,
+      overbought: rsi >= overbought,
+      oversold: rsi <= oversold,
+      neutral: rsi > oversold && rsi < overbought
+    };
+  }
+  
+  /**
+   * Check for RSI divergence (price making new highs/lows but RSI isn't)
+   * @param {string} symbol - The trading pair symbol
+   * @param {Array} candles - Recent candle data
+   * @param {number} lookback - Number of candles to look back
+   * @returns {Object} - Divergence analysis
+   */
+  checkDivergence(symbol, candles, lookback = 5) {
+    if (!this.rsiData[symbol] || !this.rsiData[symbol].points || this.rsiData[symbol].points.length < 2) {
+      return {
+        valid: false,
+        message: 'Insufficient RSI data for divergence analysis'
+      };
+    }
+    
+    if (!candles || candles.length < lookback) {
+      return {
+        valid: false,
+        message: 'Insufficient candle data for divergence analysis'
+      };
+    }
+    
+    // Get recent candles and RSI points
+    const recentCandles = [...candles].sort((a, b) => a.timestamp - b.timestamp).slice(-lookback);
+    
+    // Find matching RSI points for these candles
+    const recentRsiPoints = this.rsiData[symbol].points.filter(
+      point => recentCandles.some(candle => candle.timestamp === point.timestamp)
+    );
+    
+    if (recentRsiPoints.length < 2) {
+      return {
+        valid: false,
+        message: 'Insufficient matching RSI points for divergence analysis'
+      };
+    }
+    
+    // Check for highs and lows
+    const highPrices = recentCandles.map(candle => candle.high);
+    const lowPrices = recentCandles.map(candle => candle.low);
+    const rsiValues = recentRsiPoints.map(point => point.value);
+    
+    const maxPrice = Math.max(...highPrices);
+    const minPrice = Math.min(...lowPrices);
+    const maxRsi = Math.max(...rsiValues);
+    const minRsi = Math.min(...rsiValues);
+    
+    // Check for bullish divergence (price making lower lows but RSI making higher lows)
+    const priceIndex = lowPrices.indexOf(minPrice);
+    const rsiIndex = rsiValues.indexOf(minRsi);
+    
+    const bullishDivergence = priceIndex !== rsiIndex && 
+      priceIndex > rsiIndex && 
+      recentRsiPoints[recentRsiPoints.length - 1].value > minRsi;
+    
+    // Check for bearish divergence (price making higher highs but RSI making lower highs)
+    const priceHighIndex = highPrices.indexOf(maxPrice);
+    const rsiHighIndex = rsiValues.indexOf(maxRsi);
+    
+    const bearishDivergence = priceHighIndex !== rsiHighIndex && 
+      priceHighIndex > rsiHighIndex && 
+      recentRsiPoints[recentRsiPoints.length - 1].value < maxRsi;
+    
+    return {
+      valid: true,
+      bullishDivergence,
+      bearishDivergence,
+      recentCandles,
+      recentRsiPoints
+    };
+  }
+  
+  /**
+   * Get a trading signal based on RSI conditions
+   * @param {string} symbol - The trading pair symbol
+   * @param {Array} candles - Recent candle data for divergence check
+   * @returns {Object} - The trading signal
+   */
+  getSignal(symbol, candles) {
+    const conditions = this.checkConditions(symbol);
+    
+    if (!conditions.valid) {
+      return {
+        valid: false,
+        message: conditions.message
+      };
+    }
+    
+    let signal = 'NEUTRAL';
+    let strength = 0;
+    
+    // Check for extreme oversold condition (strong buy signal)
+    if (conditions.oversold) {
+      signal = 'BUY';
+      strength = conditions.rsi <= 20 ? 3 : 2;
+    }
+    // Check for extreme overbought condition (strong sell signal)
+    else if (conditions.overbought) {
+      signal = 'SELL';
+      strength = conditions.rsi >= 80 ? 3 : 2;
+    }
+    
+    // Check for divergence if we have candle data
+    if (candles && candles.length > 0) {
+      const divergence = this.checkDivergence(symbol, candles);
+      
+      if (divergence.valid) {
+        // Bullish divergence strengthens buy signal or weakens sell signal
+        if (divergence.bullishDivergence) {
+          if (signal === 'NEUTRAL' || signal === 'BUY') {
+            signal = 'BUY';
+            strength += 1;
+          } else if (signal === 'SELL') {
+            strength -= 1;
+            if (strength <= 0) {
+              signal = 'NEUTRAL';
+              strength = 0;
+            }
+          }
+        }
+        // Bearish divergence strengthens sell signal or weakens buy signal
+        else if (divergence.bearishDivergence) {
+          if (signal === 'NEUTRAL' || signal === 'SELL') {
+            signal = 'SELL';
+            strength += 1;
+          } else if (signal === 'BUY') {
+            strength -= 1;
+            if (strength <= 0) {
+              signal = 'NEUTRAL';
+              strength = 0;
+            }
+          }
+        }
+      }
+    }
+    
+    return {
+      valid: true,
+      signal,
+      strength,
+      conditions
+    };
+  }
+}
+
+module.exports = new RSIIndicator();

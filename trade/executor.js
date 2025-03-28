@@ -150,6 +150,7 @@ class TradeExecutor extends EventEmitter {
     try {
       // Calculate activation price based on entry price
       let activationPriceChange;
+      let activationPrice;
       
       if (trade.direction === 'BUY') {
         activationPriceChange = trade.entryPrice * config.trading.trailingStopActivation;

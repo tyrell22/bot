@@ -83,18 +83,7 @@ class OrderbookAnalyzer {
       imbalanceRatio,
       // More than 2:1 ratio indicates significant imbalance
       significantImbalance: imbalanceRatio > 2.0 || imbalanceRatio < 0.5,
-      bullishFactors,
-      bearishFactors,
-      totalFactors,
-      overallScore,
-      signal: overallScore > 0.3 ? 'BUY' : 
-              overallScore < -0.3 ? 'SELL' : 
-              'NEUTRAL'
-    };
-  }
-}
-
-module.exports = new OrderbookAnalyzer();: imbalanceRatio > 2.0,
+      bullish: imbalanceRatio > 2.0,
       bearish: imbalanceRatio < 0.5
     };
   }
@@ -378,4 +367,15 @@ module.exports = new OrderbookAnalyzer();: imbalanceRatio > 2.0,
       depth,
       spreadTrend,
       orderFlow,
-      bullish
+      bullishFactors,
+      bearishFactors,
+      totalFactors,
+      overallScore,
+      signal: overallScore > 0.3 ? 'BUY' : 
+              overallScore < -0.3 ? 'SELL' : 
+              'NEUTRAL'
+    };
+  }
+}
+
+module.exports = new OrderbookAnalyzer();
