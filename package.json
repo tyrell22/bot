@@ -1,0 +1,29 @@
+{
+    "name": "bybit-scalping-bot",
+    "version": "1.0.0",
+    "description": "Automated scalping bot for ByBit exchange with ML-powered strategy optimization",
+    "main": "index.js",
+    "scripts": {
+      "start": "node index.js",
+      "test": "jest"
+    },
+    "author": "",
+    "license": "MIT",
+    "dependencies": {
+      "@tensorflow/tfjs-node": "^4.11.0",
+      "axios": "^1.6.0",
+      "crypto": "^1.0.1",
+      "dotenv": "^16.3.1",
+      "fs-extra": "^11.1.1",
+      "jsonwebtoken": "^9.0.2",
+      "lodash": "^4.17.21",
+      "moment": "^2.29.4",
+      "technicalindicators": "^3.1.0",
+      "uuid": "^9.0.1",
+      "winston": "^3.10.0",
+      "ws": "^8.14.2"
+    },
+    "devDependencies": {
+      "jest": "^29.7.0"
+    }
+  }
