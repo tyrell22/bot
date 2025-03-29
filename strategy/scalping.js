@@ -38,7 +38,7 @@ class ScalpingStrategy extends EventEmitter {
     this.wsManager = wsManager;
     this.dataCollector = dataCollector;
     
-    logger.info('Improved Scalping strategy initialized');
+    logger.debug('Improved Scalping strategy initialized');
     
     return true;
   }
@@ -75,7 +75,7 @@ class ScalpingStrategy extends EventEmitter {
           lastCheck: Date.now()
         };
         
-        logger.info(`Added new symbol to analysis list: ${symbol}`);
+        logger.debug(`Added new symbol to analysis list: ${symbol}`);
       }
       
       // Update symbol data based on type
@@ -106,7 +106,7 @@ class ScalpingStrategy extends EventEmitter {
         const cooldownPeriod = 1000; // 1 second between analyses
         
         if (now - this.symbolData[symbol].lastAnalysis > cooldownPeriod) {
-          logger.info(`${symbol} is ready for analysis, triggering now`);
+          logger.debug(`${symbol} is ready for analysis, triggering now`);
           this.symbolData[symbol].lastAnalysis = now;
           
           try {
@@ -150,8 +150,6 @@ class ScalpingStrategy extends EventEmitter {
     
     // Update status
     this.dataStatus[symbol].hasKlineData = hasMainTimeframe;
-    
-    logger.info(`Updated klines for ${symbol} (${data.timeframe}): ${data.data.length} candles, main timeframe ready: ${hasMainTimeframe}`);
   }
   
   /**
@@ -170,8 +168,6 @@ class ScalpingStrategy extends EventEmitter {
     
     // Update status
     this.dataStatus[symbol].hasOrderbookData = true;
-    
-    logger.info(`Updated orderbook for ${symbol}: ${data.data.bids.length} bids, ${data.data.asks.length} asks`);
   }
   
   /**
@@ -190,8 +186,6 @@ class ScalpingStrategy extends EventEmitter {
     
     // Update status
     this.dataStatus[symbol].hasTickerData = true;
-    
-    logger.info(`Updated ticker for ${symbol}: price ${data.data.lastPrice}`);
   }
   
   /**
@@ -211,12 +205,11 @@ class ScalpingStrategy extends EventEmitter {
     
     // Log status changes (but not too often)
     if (Math.random() < 0.05) { // Only log occasionally to avoid spam
-      logger.info(`${symbol} data status: ticker=${status.hasTickerData}, orderbook=${status.hasOrderbookData}, klines=${status.hasKlineData}, ready=${status.readyForAnalysis}`);
     }
     
     // If we just became ready, log it explicitly
     if (isReady && !this.dataStatus[symbol].wasReadyBefore) {
-      logger.info(`${symbol} is now READY for analysis with all required data`);
+      logger.debug(`${symbol} is now READY for analysis with all required data`);
       this.dataStatus[symbol].wasReadyBefore = true;
       
       // Print data summary
@@ -254,7 +247,7 @@ class ScalpingStrategy extends EventEmitter {
       };
     }
     
-    logger.info(`DATA SUMMARY FOR ${symbol}:
+    logger.debug(`DATA SUMMARY FOR ${symbol}:
     Ticker: ${JSON.stringify(ticker)}
     Orderbook: ${JSON.stringify(orderbook)}
     Klines: ${JSON.stringify(klines)}
@@ -266,7 +259,7 @@ class ScalpingStrategy extends EventEmitter {
    * @param {string} symbol - The trading pair symbol
    */
   analyzeSymbol(symbol) {
-    logger.info(`STARTING ANALYSIS FOR ${symbol} ==================`);
+    logger.debug(`STARTING ANALYSIS FOR ${symbol} ==================`);
     
     try {
       const symbolData = this.symbolData[symbol];
@@ -278,7 +271,7 @@ class ScalpingStrategy extends EventEmitter {
       
       // Skip if we're in a signal cooldown period
       if (this.lastSignals[symbol] && Date.now() - this.lastSignals[symbol] < this.signalCooldown) {
-        logger.info(`${symbol}: In cooldown period, next analysis in ${Math.round((this.lastSignals[symbol] + this.signalCooldown - Date.now()) / 1000)}s`);
+        logger.debug(`${symbol}: In cooldown period, next analysis in ${Math.round((this.lastSignals[symbol] + this.signalCooldown - Date.now()) / 1000)}s`);
         return;
       }
       
@@ -287,15 +280,15 @@ class ScalpingStrategy extends EventEmitter {
       const orderbook = symbolData.orderbook;
       const mainTimeframeKlines = symbolData.klines[config.mainTimeframe];
       
-      logger.info(`${symbol}: Running technical analysis with ${mainTimeframeKlines.length} candles`);
+      logger.debug(`${symbol}: Running technical analysis with ${mainTimeframeKlines.length} candles`);
       
       // Run technical indicator calculations with detailed error handling
       let vwapResult, rsiResult, emaResult, macdResult, orderbookResult;
       
       try {
-        logger.info(`${symbol}: Calculating VWAP...`);
+        logger.debug(`${symbol}: Calculating VWAP...`);
         vwapResult = vwap.calculate(symbol, mainTimeframeKlines);
-        logger.info(`${symbol}: VWAP calculation ${vwapResult.valid ? 'successful' : 'failed'}`);
+        logger.debug(`${symbol}: VWAP calculation ${vwapResult.valid ? 'successful' : 'failed'}`);
         
         if (!vwapResult.valid) {
           logger.warn(`${symbol}: VWAP calculation failed: ${vwapResult.message}`);
@@ -307,9 +300,9 @@ class ScalpingStrategy extends EventEmitter {
       }
       
       try {
-        logger.info(`${symbol}: Calculating RSI...`);
+        logger.debug(`${symbol}: Calculating RSI...`);
         rsiResult = rsi.calculate(symbol, mainTimeframeKlines);
-        logger.info(`${symbol}: RSI calculation ${rsiResult.valid ? 'successful' : 'failed'}`);
+        logger.debug(`${symbol}: RSI calculation ${rsiResult.valid ? 'successful' : 'failed'}`);
         
         if (!rsiResult.valid) {
           logger.warn(`${symbol}: RSI calculation failed: ${rsiResult.message}`);
@@ -321,9 +314,9 @@ class ScalpingStrategy extends EventEmitter {
       }
       
       try {
-        logger.info(`${symbol}: Calculating EMA...`);
+        logger.debug(`${symbol}: Calculating EMA...`);
         emaResult = ema.calculate(symbol, mainTimeframeKlines);
-        logger.info(`${symbol}: EMA calculation ${emaResult.valid ? 'successful' : 'failed'}`);
+        logger.debug(`${symbol}: EMA calculation ${emaResult.valid ? 'successful' : 'failed'}`);
         
         if (!emaResult.valid) {
           logger.warn(`${symbol}: EMA calculation failed: ${emaResult.message}`);
@@ -335,9 +328,9 @@ class ScalpingStrategy extends EventEmitter {
       }
       
       try {
-        logger.info(`${symbol}: Calculating MACD...`);
+        logger.debug(`${symbol}: Calculating MACD...`);
         macdResult = macd.calculate(symbol, mainTimeframeKlines);
-        logger.info(`${symbol}: MACD calculation ${macdResult.valid ? 'successful' : 'failed'}`);
+        logger.debug(`${symbol}: MACD calculation ${macdResult.valid ? 'successful' : 'failed'}`);
         
         if (!macdResult.valid) {
           logger.warn(`${symbol}: MACD calculation failed: ${macdResult.message}`);
@@ -349,9 +342,9 @@ class ScalpingStrategy extends EventEmitter {
       }
       
       try {
-        logger.info(`${symbol}: Analyzing orderbook...`);
+        logger.debug(`${symbol}: Analyzing orderbook...`);
         orderbookResult = orderbookAnalyzer.getFullAnalysis(symbol, orderbook);
-        logger.info(`${symbol}: Orderbook analysis completed with signal: ${orderbookResult.signal}`);
+        logger.debug(`${symbol}: Orderbook analysis completed with signal: ${orderbookResult.signal}`);
         
         if (!orderbookResult.signal) {
           logger.warn(`${symbol}: Orderbook analysis failed to generate signal`);
@@ -362,22 +355,22 @@ class ScalpingStrategy extends EventEmitter {
         return;
       }
       
-      logger.info(`${symbol}: All technical indicators calculated successfully`);
+      logger.debug(`${symbol}: All technical indicators calculated successfully`);
       
       // Get current price and calculate indicator signals
       const currentPrice = ticker.lastPrice;
       
       try {
-        logger.info(`${symbol}: Getting individual indicator signals...`);
+        logger.debug(`${symbol}: Getting individual indicator signals...`);
         const vwapSignal = vwap.getSignal(symbol, currentPrice);
         const rsiSignal = rsi.getSignal(symbol, mainTimeframeKlines);
         const emaSignal = ema.getSignal(symbol, currentPrice);
         const macdSignal = macd.getSignal(symbol);
         
-        logger.info(`${symbol}: Individual signals - VWAP: ${vwapSignal.signal}, RSI: ${rsiSignal.signal}, EMA: ${emaSignal.signal}, MACD: ${macdSignal.signal}, Orderbook: ${orderbookResult.signal}`);
+        logger.debug(`${symbol}: Individual signals - VWAP: ${vwapSignal.signal}, RSI: ${rsiSignal.signal}, EMA: ${emaSignal.signal}, MACD: ${macdSignal.signal}, Orderbook: ${orderbookResult.signal}`);
         
         // Calculate combined signal
-        logger.info(`${symbol}: Calculating combined signal strength...`);
+        logger.debug(`${symbol}: Calculating combined signal strength...`);
         const signalStrength = this.calculateSignalStrength(
           vwapSignal,
           rsiSignal,
@@ -386,13 +379,13 @@ class ScalpingStrategy extends EventEmitter {
           orderbookResult
         );
         
-        logger.info(`${symbol}: Combined signal strength: ${signalStrength.toFixed(2)}`);
+        logger.debug(`${symbol}: Combined signal strength: ${signalStrength.toFixed(2)}`);
         
         // Generate signal if strong enough
-        if (Math.abs(signalStrength) >= 2) {
+        if (Math.abs(signalStrength) >= 4) {
           const direction = signalStrength > 0 ? 'BUY' : 'SELL';
           
-          logger.info(`${symbol}: Signal strength ${Math.abs(signalStrength)} exceeds threshold, generating ${direction} signal`);
+          logger.debug(`${symbol}: Signal strength ${Math.abs(signalStrength)} exceeds threshold, generating ${direction} signal`);
           
           // Create signal object
           const signal = {
@@ -411,22 +404,22 @@ class ScalpingStrategy extends EventEmitter {
           };
           
           // Emit signal
-          logger.info(`${symbol}: Emitting ${direction} signal`);
+          logger.debug(`${symbol}: Emitting ${direction} signal`);
           this.emit('signal', signal);
           
           // Set cooldown
           this.lastSignals[symbol] = Date.now();
           
-          logger.info(`${symbol}: ${direction} signal emitted successfully, cooldown set`);
+          logger.debug(`${symbol}: ${direction} signal emitted successfully, cooldown set`);
         } else {
-          logger.info(`${symbol}: Signal strength ${Math.abs(signalStrength)} below threshold (2.0), no signal generated`);
+          logger.debug(`${symbol}: Signal strength ${Math.abs(signalStrength)} below threshold (2.0), no signal generated`);
         }
       } catch (signalError) {
         logger.error(`${symbol}: Error generating signals: ${signalError.message}`);
         logger.error(signalError.stack);
       }
       
-      logger.info(`${symbol}: Analysis completed`);
+      logger.debug(`${symbol}: Analysis completed`);
     } catch (error) {
       logger.error(`${symbol}: Uncaught error during analysis: ${error.message}`);
       logger.error(error.stack);

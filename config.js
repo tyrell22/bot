@@ -10,15 +10,15 @@ module.exports = {
     testnet: false, // Set to true for testnet
   },
   
-  // Trading Parameters
   trading: {
     leverage: 10, // 10x leverage
-    targetProfit: 0.03, // 3% profit target
-    stopLoss: 0.02, // 1.5% stop loss
+    targetProfit: 0.003, // 3% profit target
+    stopLoss: 0.002, // 2% stop loss
     trailingStopActivation: 0.02, // Activate trailing stop after 2% profit
+    trailingStopPercent: 0.01, // Trailing stop follows price at 1% distance
     maxTradesPerHour: 15,
     maxOpenPositions: 10,
-    positionSizePercentage: 0.01, // 5% of available balance per trade
+    positionSizePercentage: 0.005, // 1% of available balance per trade
     inactivePositionMinutes: 20, // Close positions not moving after 20 minutes
   },
   

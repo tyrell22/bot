@@ -85,24 +85,33 @@ class TradeManager extends EventEmitter {
         }
         
         const symbol = position.symbol;
-        
-        this.openPositions.set(symbol, {
-          symbol,
-          size: parseFloat(position.size),
-          entryPrice: parseFloat(position.entryPrice),
-          markPrice: parseFloat(position.markPrice),
-          leverage: parseFloat(position.leverage),
-          marginType: position.marginType,
-          positionValue: parseFloat(position.positionValue),
-          unrealisedPnl: parseFloat(position.unrealisedPnl),
-          createdTime: parseInt(position.createdTime),
-          updatedTime: parseInt(position.updatedTime),
-          side: parseFloat(position.size) > 0 ? 'Buy' : 'Sell',
-          lastRefreshed: Date.now()
-        });
+      const entryPrice = parseFloat(position.entryPrice);
+      const markPrice = parseFloat(position.markPrice);
+      const leverage = parseFloat(position.leverage);
+
+      // Log invalid values for debugging
+      if (isNaN(entryPrice)) logger.warn(`NaN entryPrice for ${symbol}: ${position.entryPrice}`);
+      if (isNaN(markPrice)) logger.warn(`NaN markPrice for ${symbol}: ${position.markPrice}`);
+      if (isNaN(leverage)) logger.warn(`NaN leverage for ${symbol}: ${position.leverage}`);
+
+      this.openPositions.set(symbol, {
+        symbol,
+        size: parseFloat(position.size),
+        entryPrice,
+        markPrice,
+        leverage,
+        marginType: position.marginType,
+        positionValue: parseFloat(position.positionValue),
+        unrealisedPnl: parseFloat(position.unrealisedPnl),
+        createdTime: parseInt(position.createdTime),
+        updatedTime: parseInt(position.updatedTime),
+        side: parseFloat(position.size) > 0 ? 'Buy' : 'Sell',
+        lastRefreshed: Date.now()
+      });
       }
       
       logger.info(`Refreshed ${this.openPositions.size} open positions from ByBit`);
+      
       
       return Array.from(this.openPositions.values());
     } catch (error) {
@@ -232,12 +241,18 @@ class TradeManager extends EventEmitter {
       } else {
         pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100 * position.leverage;
       }
+      logger.info(`Position ${symbol}: PNL = ${pnlPercent.toFixed(2)}%, Threshold = ${config.trading.trailingStopActivation * 100}%`);
+if (pnlPercent > activationThreshold) {
+  logger.info(`Profit threshold exceeded for ${symbol}, enabling trailing stop`);
+  await this.enableTrailingStop(symbol, position, trade);
+}
       
       // Update position with current P&L
       position.pnlPercent = pnlPercent;
       
       // Check if we need to enable trailing stop
-      if (trade && trade.trailingStop && !trade.trailingStopEnabled) {
+      // No need to check trade.trailingStop since we'll always consider enabling it
+      if (trade && !trade.trailingStopEnabled) {
         const activationThreshold = config.trading.trailingStopActivation * 100;
         
         // If profit exceeds activation threshold, enable trailing stop
@@ -250,35 +265,47 @@ class TradeManager extends EventEmitter {
     }
   }
   
-  /**
-   * Enable trailing stop for a position
-   * @param {string} symbol - Position symbol
-   * @param {Object} position - Position data
-   * @param {Object} trade - Trade data
-   */
+  // Modified enableTrailingStop method in trade/manager.js
   async enableTrailingStop(symbol, position, trade) {
     try {
-      // Calculate trailing stop distance (1% of current price)
-      const trailingStop = position.markPrice * 0.01;
+      // Get trailing stop activation percentage from config (or use default of 1%)
+      const trailingStopPercent = config.trading.trailingStopPercent || 0.01;
       
-      // Setup trailing stop
-      await bybit.setTradingStop(symbol, {
-        trailingStop: trailingStop.toFixed(4)
-      });
+      // Calculate trailing stop distance based on current price
+      const trailingStop = position.markPrice * trailingStopPercent;
       
-      // Mark trailing stop as enabled
+      // Determine position side
+      const positionSide = position.side.toLowerCase();
+      
+      // Set up trailing stop with proper parameters
+      // ByBit API expects trailing stop as a percentage value
+      const trailingStopParams = {
+        symbol: symbol,
+        trailingStop: (trailingStopPercent * 100).toFixed(2), // Convert to percentage (e.g., 1% = 1.00)
+        positionIdx: 0 // For One-Way Mode
+      };
+      
+      logger.info(`Enabling trailing stop for ${symbol} at ${trailingStopParams.trailingStop}% distance`);
+      
+      // Call ByBit API to set trailing stop
+      await bybit.setTradingStop(symbol, trailingStopParams);
+      
+      // Mark trailing stop as enabled in trade record
+      trade.trailingStop = true;
       trade.trailingStopEnabled = true;
       trade.trailingStopValue = trailingStop;
+      trade.trailingStopPercent = trailingStopPercent * 100; // Store as percentage
       trade.trailingStopTime = Date.now();
       
       // Update trade record
       tradeExecutor.saveTrade(trade);
       
-      logger.info(`Enabled trailing stop for ${symbol} at distance ${trailingStop.toFixed(6)}`);
+      logger.info(`Successfully enabled trailing stop for ${symbol} at ${trailingStopParams.trailingStop}% distance`);
       
       return true;
     } catch (error) {
       logger.error(`Error enabling trailing stop for ${symbol}: ${error.message}`);
+      logger.error(`Error details: ${JSON.stringify(error)}`);
       return false;
     }
   }

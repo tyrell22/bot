@@ -48,10 +48,21 @@ class TradeExecutor extends EventEmitter {
       // Calculate account value
       const accountEquity = parseFloat(accountInfo.availableBalance);
       
-      // Calculate position size directly (this is the core fix)
-      // Formula: position size = (accountEquity * riskPercent) / currentPrice
-      // For leveraged trading: position size = (accountEquity * riskPercent * leverage) / currentPrice
-      const positionValue = accountEquity * config.trading.positionSizePercentage * config.trading.leverage;
+      // Get the leverage from config
+      const leverage = config.trading.leverage;
+      
+      // Set leverage for this symbol before placing the order
+      try {
+        logger.info(`Setting leverage for ${signal.symbol} to ${leverage}x`);
+        await bybit.setLeverage(signal.symbol, leverage);
+      } catch (leverageError) {
+        // If setting leverage fails, log it but continue
+        // Often this happens if the leverage is already set to the desired value
+        logger.warn(`Error setting leverage for ${signal.symbol}: ${leverageError.message}`);
+      }
+      
+      // Calculate position size directly
+      const positionValue = accountEquity * config.trading.positionSizePercentage * leverage;
       const positionSize = positionValue / currentPrice;
       
       // Generate trade ID
@@ -59,12 +70,27 @@ class TradeExecutor extends EventEmitter {
       
       // Create order parameters
       const side = signal.direction === 'BUY' ? 'Buy' : 'Sell';
+      
+      // Calculate take profit and stop loss levels
+      let takeProfitPrice, stopLossPrice;
+      
+      if (side === 'Buy') {
+        takeProfitPrice = currentPrice * (1 + config.trading.targetProfit);
+        stopLossPrice = currentPrice * (1 - config.trading.stopLoss);
+      } else {
+        takeProfitPrice = currentPrice * (1 - config.trading.targetProfit);
+        stopLossPrice = currentPrice * (1 + config.trading.stopLoss);
+      }
+      
+      // Create order parameters including TP and SL
       const orderParams = {
         symbol: signal.symbol,
         side: side,
         orderType: 'Market',
         quantity: positionSize.toFixed(), // Use 3 decimal places for most crypto pairs
-        timeInForce: 'GTC'
+        timeInForce: 'GTC',
+        takeProfit: takeProfitPrice.toFixed(6),
+        stopLoss: stopLossPrice.toFixed(6)
       };
       
       // Track pending trade
@@ -77,7 +103,7 @@ class TradeExecutor extends EventEmitter {
       });
       
       // Place the order
-      logger.info(`Executing ${side} order for ${signal.symbol} with quantity ${orderParams.quantity}`);
+      logger.info(`Executing ${side} order for ${signal.symbol} with quantity ${orderParams.quantity}, leverage: ${leverage}x, TP: ${orderParams.takeProfit}, SL: ${orderParams.stopLoss}`);
       const orderResult = await bybit.placeOrder(orderParams);
       
       // Update pending trade
@@ -89,20 +115,25 @@ class TradeExecutor extends EventEmitter {
         pendingTrade.executedAt = Date.now();
       }
       
-      // Create trade record
-      const trade = {
-        id: tradeId,
-        symbol: signal.symbol,
-        direction: signal.direction,
-        entryPrice: currentPrice,
-        quantity: orderParams.quantity,
-        leverage: config.trading.leverage,
-        orderId: orderResult.orderId,
-        status: 'OPEN',
-        signalStrength: signal.strength,
-        entryTime: Date.now(),
-        indicators: signal.indicators
-      };
+     // Create trade record
+const trade = {
+  id: tradeId,
+  symbol: signal.symbol,
+  direction: signal.direction,
+  entryPrice: currentPrice,
+  quantity: orderParams.quantity,
+  leverage: leverage,
+  orderId: orderResult.orderId,
+  status: 'OPEN',
+  signalStrength: signal.strength,
+  entryTime: Date.now(),
+  indicators: signal.indicators,
+  takeProfitPrice: takeProfitPrice,
+  stopLossPrice: stopLossPrice,
+  trailingStop: false,         // Initialize to false
+  trailingStopEnabled: false,  // Initialize to false
+  trailingStopValue: null      // Will be set when enabled
+};
       
       // Add to trade history
       this.tradeHistory.push(trade);
