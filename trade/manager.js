@@ -16,11 +16,13 @@ class TradeManager extends EventEmitter {
     this.monitoring = false;
     this.monitoringInterval = null;
     this.checkInterval = 10000; // 10 seconds
+    
   }
   
   /**
    * Initialize the trade manager
    */
+  
   init() {
     // Load existing positions from exchange
     this.refreshPositions();
@@ -69,7 +71,9 @@ class TradeManager extends EventEmitter {
   
   /**
    * Refresh positions from exchange
+    * @param {Object} trade - Trade data if available
    */
+  
   async refreshPositions() {
     try {
       const positions = await bybit.getPositions();
@@ -78,45 +82,169 @@ class TradeManager extends EventEmitter {
       this.openPositions.clear();
       
       // Process active positions
-      for (const position of positions) {
-        // Skip positions with zero size
-        if (parseFloat(position.size) === 0) {
-          continue;
-        }
+      if (positions && Array.isArray(positions)) {
+        logger.info(`Got ${positions.length} positions from ByBit API`);
         
-        const symbol = position.symbol;
-      const entryPrice = parseFloat(position.entryPrice);
-      const markPrice = parseFloat(position.markPrice);
-      const leverage = parseFloat(position.leverage);
-
-      // Log invalid values for debugging
-      if (isNaN(entryPrice)) logger.warn(`NaN entryPrice for ${symbol}: ${position.entryPrice}`);
-      if (isNaN(markPrice)) logger.warn(`NaN markPrice for ${symbol}: ${position.markPrice}`);
-      if (isNaN(leverage)) logger.warn(`NaN leverage for ${symbol}: ${position.leverage}`);
-
-      this.openPositions.set(symbol, {
-        symbol,
-        size: parseFloat(position.size),
-        entryPrice,
-        markPrice,
-        leverage,
-        marginType: position.marginType,
-        positionValue: parseFloat(position.positionValue),
-        unrealisedPnl: parseFloat(position.unrealisedPnl),
-        createdTime: parseInt(position.createdTime),
-        updatedTime: parseInt(position.updatedTime),
-        side: parseFloat(position.size) > 0 ? 'Buy' : 'Sell',
-        lastRefreshed: Date.now()
-      });
+        for (const position of positions) {
+          // Skip positions with zero size or missing required data
+          if (!position || !position.symbol || parseFloat(position.size || 0) === 0) {
+            continue;
+          }
+          
+          const symbol = position.symbol;
+          
+          // Make sure we extract these values safely
+          const entryPrice = this.safeParseFloat(position.entryPrice);
+          const markPrice = this.safeParseFloat(position.markPrice);
+          const size = this.safeParseFloat(position.size);
+          const leverage = this.safeParseFloat(position.leverage, 1); // Default to 1x if parsing fails
+          const positionValue = this.safeParseFloat(position.positionValue);
+          const unrealisedPnl = this.safeParseFloat(position.unrealisedPnl);
+          
+          // Debug log to help diagnose issues
+          logger.info(`Position data for ${symbol}: size=${size}, entryPrice=${entryPrice}, markPrice=${markPrice}, leverage=${leverage}`);
+          
+          // Only add position if we have valid price data
+          if (isNaN(entryPrice) || isNaN(markPrice)) {
+            logger.warn(`Skipping position for ${symbol} due to invalid price data: entryPrice=${trade.entryPrice}, markPrice=${position.markPrice}`);
+            continue;
+          }
+          
+          // Determine position side
+          const side = size > 0 ? 'Buy' : 'Sell';
+          
+          // Add to open positions
+          this.openPositions.set(symbol, {
+            symbol,
+            size,
+            entryPrice,
+            markPrice,
+            leverage,
+            marginType: position.marginType || 'isolated',
+            positionValue,
+            unrealisedPnl,
+            createdTime: this.safeParseInt(position.createdTime, Date.now()),
+            updatedTime: this.safeParseInt(position.updatedTime, Date.now()),
+            side,
+            lastRefreshed: Date.now()
+          });
+        }
+      } else {
+        logger.warn('Invalid positions data received from ByBit API');
       }
       
       logger.info(`Refreshed ${this.openPositions.size} open positions from ByBit`);
-      
       
       return Array.from(this.openPositions.values());
     } catch (error) {
       logger.error(`Error refreshing positions: ${error.message}`);
       return [];
+    }
+  }
+  
+  /**
+   * Safely parse a float value
+   * @param {any} value - The value to parse
+   * @param {number} defaultValue - Default value to return if parsing fails
+   * @returns {number} - Parsed float value
+   */
+  safeParseFloat(value, defaultValue = 0) {
+    if (value === undefined || value === null) return defaultValue;
+    
+    const parsed = parseFloat(value);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+  
+  /**
+   * Safely parse an integer value
+   * @param {any} value - The value to parse
+   * @param {number} defaultValue - Default value to return if parsing fails
+   * @returns {number} - Parsed integer value
+   */
+  safeParseInt(value, defaultValue = 0) {
+    if (value === undefined || value === null) return defaultValue;
+    
+    const parsed = parseInt(value);
+    return isNaN(parsed) ? defaultValue : parsed;
+  }
+  
+  /**
+   * Log detailed diagnostic information about position data
+   * @param {Array} positions - Position data from ByBit API
+   */
+  logPositionDiagnostics(positions) {
+    if (!positions || !Array.isArray(positions)) {
+      logger.error('Invalid positions data for diagnostics');
+      return;
+    }
+  
+    logger.info(`Diagnostic information for ${positions.length} positions from ByBit API`);
+  
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i];
+      if (!pos) continue;
+  
+      logger.info(`Position ${i + 1}/${positions.length} - ${pos.symbol || 'Unknown'}`);
+      
+      // Check for essential properties
+      const checks = [
+        { property: 'symbol', value: pos.symbol },
+        { property: 'size', value: pos.size, parsed: parseFloat(pos.size) },
+        { property: 'entryPrice', value: pos.entryPrice, parsed: parseFloat(pos.entryPrice) },
+        { property: 'markPrice', value: pos.markPrice, parsed: parseFloat(pos.markPrice) },
+        { property: 'leverage', value: pos.leverage, parsed: parseFloat(pos.leverage) },
+        { property: 'positionValue', value: pos.positionValue, parsed: parseFloat(pos.positionValue) },
+        { property: 'unrealisedPnl', value: pos.unrealisedPnl, parsed: parseFloat(pos.unrealisedPnl) }
+      ];
+  
+      for (const check of checks) {
+        const status = check.value === undefined ? 'MISSING' :
+                      check.parsed !== undefined && isNaN(check.parsed) ? 'INVALID' : 'OK';
+        
+        logger.info(`  - ${check.property}: ${status} (Raw: ${check.value}, Parsed: ${check.parsed})`);
+      }
+  
+      // Log the full position object for deeper analysis if needed
+      logger.info(`Full position data for ${pos.symbol || 'Unknown'}: ${JSON.stringify(pos)}`);
+    }
+  }
+  
+  /**
+   * Run a one-time diagnostic check of position data from the ByBit API
+   * This can be called manually when troubleshooting
+   */
+  
+  async runPositionDiagnostic() {
+    try {
+      logger.info('Running position data diagnostic...');
+      
+      // Get raw position data from ByBit API
+      const positions = await bybit.getPositions();
+      
+      
+      // Log detailed information
+      this.logPositionDiagnostics(positions);
+      
+      // Test parsing with our safe methods
+      if (positions && Array.isArray(positions)) {
+        for (const position of positions) {
+          if (!position || !position.symbol) continue;
+          
+          const symbol = position.symbol;
+          logger.info(`Safe parsing test for ${symbol}:`);
+          
+          const entryPrice = this.safeParseFloat(position.entryPrice);
+          const markPrice = this.safeParseFloat(position.markPrice);
+          const size = this.safeParseFloat(position.size);
+          const leverage = this.safeParseFloat(position.leverage, 1);
+          
+          logger.info(`  - Safe parsed values: entryPrice=${entryPrice}, markPrice=${markPrice}, size=${size}, leverage=${leverage}`);
+        }
+      }
+      
+      logger.info('Position diagnostic completed');
+    } catch (error) {
+      logger.error(`Error running position diagnostic: ${error.message}`);
     }
   }
   
@@ -231,9 +359,9 @@ class TradeManager extends EventEmitter {
   async managePosition(symbol, position, trade) {
     try {
       // Calculate current P&L percentage
-      const entryPrice = position.entryPrice;
+      const entryPrice = trade.entryPrice;
       const currentPrice = position.markPrice;
-      const side = position.side;
+      const side = trade.direction;
       
       let pnlPercent;
       if (side === 'Buy') {
@@ -241,22 +369,20 @@ class TradeManager extends EventEmitter {
       } else {
         pnlPercent = ((entryPrice - currentPrice) / entryPrice) * 100 * position.leverage;
       }
-      logger.info(`Position ${symbol}: PNL = ${pnlPercent.toFixed(2)}%, Threshold = ${config.trading.trailingStopActivation * 100}%`);
-if (pnlPercent > activationThreshold) {
-  logger.info(`Profit threshold exceeded for ${symbol}, enabling trailing stop`);
-  await this.enableTrailingStop(symbol, position, trade);
-}
+      
+      // Calculate activation threshold for trailing stop
+      const activationThreshold = config.trading.trailingStopActivation * 100;
+      
+      logger.info(`Position ${symbol}: PNL = ${pnlPercent.toFixed(2)}%, Threshold = ${activationThreshold}%`);
       
       // Update position with current P&L
       position.pnlPercent = pnlPercent;
       
       // Check if we need to enable trailing stop
-      // No need to check trade.trailingStop since we'll always consider enabling it
       if (trade && !trade.trailingStopEnabled) {
-        const activationThreshold = config.trading.trailingStopActivation * 100;
-        
         // If profit exceeds activation threshold, enable trailing stop
         if (pnlPercent > activationThreshold) {
+          logger.info(`Profit threshold exceeded for ${symbol}, enabling trailing stop`);
           await this.enableTrailingStop(symbol, position, trade);
         }
       }
@@ -265,7 +391,13 @@ if (pnlPercent > activationThreshold) {
     }
   }
   
-  // Modified enableTrailingStop method in trade/manager.js
+  /**
+   * Enable trailing stop for a position
+   * @param {string} symbol - Position symbol
+   * @param {Object} position - Position data
+   * @param {Object} trade - Trade data
+   * @returns {boolean} - Whether the operation was successful
+   */
   async enableTrailingStop(symbol, position, trade) {
     try {
       // Get trailing stop activation percentage from config (or use default of 1%)
@@ -274,18 +406,16 @@ if (pnlPercent > activationThreshold) {
       // Calculate trailing stop distance based on current price
       const trailingStop = position.markPrice * trailingStopPercent;
       
-      // Determine position side
-      const positionSide = position.side.toLowerCase();
+      // ByBit API expects trailing stop as a percentage value (e.g., 1% = 1.00)
+      const trailingStopPercentForAPI = (trailingStopPercent * 100).toFixed(2);
       
-      // Set up trailing stop with proper parameters
-      // ByBit API expects trailing stop as a percentage value
       const trailingStopParams = {
         symbol: symbol,
-        trailingStop: (trailingStopPercent * 100).toFixed(2), // Convert to percentage (e.g., 1% = 1.00)
+        trailingStop: trailingStopPercentForAPI,
         positionIdx: 0 // For One-Way Mode
       };
       
-      logger.info(`Enabling trailing stop for ${symbol} at ${trailingStopParams.trailingStop}% distance`);
+      logger.info(`Enabling trailing stop for ${symbol} at ${trailingStopPercentForAPI}% distance`);
       
       // Call ByBit API to set trailing stop
       await bybit.setTradingStop(symbol, trailingStopParams);
@@ -300,7 +430,7 @@ if (pnlPercent > activationThreshold) {
       // Update trade record
       tradeExecutor.saveTrade(trade);
       
-      logger.info(`Successfully enabled trailing stop for ${symbol} at ${trailingStopParams.trailingStop}% distance`);
+      logger.info(`Successfully enabled trailing stop for ${symbol} at ${trailingStopPercentForAPI}% distance`);
       
       return true;
     } catch (error) {
@@ -315,6 +445,7 @@ if (pnlPercent > activationThreshold) {
    * @param {string} symbol - Position symbol
    * @param {string} reason - Reason for closing
    * @returns {boolean} - Whether the closure was successful
+   * @param {Object} trade - Trade data if available
    */
   async closePosition(symbol, reason = 'Manual closure') {
     try {
@@ -346,7 +477,7 @@ if (pnlPercent > activationThreshold) {
       this.emit('position_closed', {
         symbol,
         size: position.size,
-        entryPrice: position.entryPrice,
+        entryPrice: trade.entryPrice,
         exitPrice: position.markPrice,
         pnl: position.unrealisedPnl,
         pnlPercentage: position.pnlPercent,
